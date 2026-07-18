@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"time"
 
 	"github.com/t0mer/linkmeta/internal/config"
 	"github.com/t0mer/linkmeta/internal/extract"
 	"github.com/t0mer/linkmeta/internal/fetch"
 	"github.com/t0mer/linkmeta/internal/llm"
+	"github.com/t0mer/linkmeta/internal/metrics"
 )
 
 // Response is the frozen /extract output.
@@ -93,10 +95,15 @@ func (s *Service) Extract(ctx context.Context, rawURL string) (Response, error) 
 		resp.Keywords = []string{}
 	}
 
+	start := time.Now()
 	llmRes, err := s.llm.Complete(ctx, llmReq)
+	metrics.LLMDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.LLMCallsTotal.WithLabelValues("error").Inc()
+		metrics.FallbackTotal.Inc()
 		s.log.Warn("llm failed; degrading", "url", rawURL, "stage", "llm", "err", err)
 	} else {
+		metrics.LLMCallsTotal.WithLabelValues("ok").Inc()
 		if llmRes.Category != "" {
 			resp.Category = llmRes.Category
 		}
