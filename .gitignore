@@ -30,3 +30,26 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Claude / AI assistant context — local only, never track
+CLAUDE.md
+.claude/
+.cursor/
+.aider*
+
+# Design / implementation / planning docs — local only
+/docs/
+docs/*
+*.design.md
+*.implementation.md
+
+# Security scan output
+scans/
+
+# Build output
+/dist/
+/bin/
+/build/
+
+# Local config / data
+config.yaml
