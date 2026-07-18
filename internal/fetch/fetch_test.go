@@ -21,7 +21,7 @@ func TestFetchUTF8(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := New(5*time.Second, "test-agent", 3<<20)
+	f := New(5*time.Second, "test-agent", 3<<20, true)
 	res, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestFetchWindows1255(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := New(5*time.Second, "test-agent", 3<<20)
+	f := New(5*time.Second, "test-agent", 3<<20, true)
 	res, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -53,12 +53,24 @@ func TestFetchWindows1255(t *testing.T) {
 	}
 }
 
+func TestFetchBlocksPrivateTarget(t *testing.T) {
+	// httptest listens on loopback; with the SSRF guard on it must be refused.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("secret internal page"))
+	}))
+	defer srv.Close()
+	f := New(5*time.Second, "ua", 3<<20, false) // guard ON
+	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
+		t.Fatal("expected loopback target to be blocked by SSRF guard")
+	}
+}
+
 func TestFetchNon2xxIsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	f := New(5*time.Second, "ua", 3<<20)
+	f := New(5*time.Second, "ua", 3<<20, true)
 	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
 		t.Fatal("expected error on 500")
 	}
@@ -69,7 +81,7 @@ func TestFetchSizeCap(t *testing.T) {
 		w.Write([]byte(strings.Repeat("a", 100)))
 	}))
 	defer srv.Close()
-	f := New(5*time.Second, "ua", 10)
+	f := New(5*time.Second, "ua", 10, true)
 	res, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatal(err)

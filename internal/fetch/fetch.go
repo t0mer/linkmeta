@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -23,10 +24,26 @@ type Fetcher struct {
 	maxBytes  int64
 }
 
-// New builds a Fetcher. maxBytes caps the read body (e.g. 3<<20).
-func New(timeout time.Duration, userAgent string, maxBytes int64) *Fetcher {
+// New builds a Fetcher. maxBytes caps the read body (e.g. 3<<20). By default it
+// refuses to connect to private/loopback/link-local targets (SSRF guard); pass
+// allowPrivate=true to permit them (self-hosters bookmarking internal URLs).
+func New(timeout time.Duration, userAgent string, maxBytes int64, allowPrivate bool) *Fetcher {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if !allowPrivate {
+		transport.DialContext = guardedDialContext(&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second})
+	}
+	client := &http.Client{Timeout: timeout, Transport: transport}
+	if !allowPrivate {
+		// Re-run the guard on each redirect hop's resolved address.
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		}
+	}
 	return &Fetcher{
-		client:    &http.Client{Timeout: timeout},
+		client:    client,
 		userAgent: userAgent,
 		maxBytes:  maxBytes,
 	}

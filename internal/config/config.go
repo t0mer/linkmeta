@@ -26,6 +26,7 @@ type Config struct {
 	LLMTimeout      time.Duration
 	MaxTextChars    int
 	UserAgent       string
+	AllowPrivate    bool
 }
 
 // viper keys double as env var names (AutomaticEnv upper-cases the key).
@@ -39,6 +40,7 @@ const (
 	kLLMTimeout   = "LLM_TIMEOUT"
 	kMaxTextChars = "MAX_TEXT_CHARS"
 	kUserAgent    = "USER_AGENT"
+	kAllowPrivate = "ALLOW_PRIVATE_TARGETS"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -51,6 +53,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kLLMTimeout, "180s")
 	v.SetDefault(kMaxTextChars, 3000)
 	v.SetDefault(kUserAgent, DefaultUserAgent)
+	v.SetDefault(kAllowPrivate, false)
 }
 
 // SetDefaults applies default values on v (exported wrapper for main).
@@ -67,6 +70,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.Duration("llm-timeout", 180*time.Second, "LLM call timeout")
 	fs.Int("max-text-chars", 3000, "max readable chars sent to model")
 	fs.String("user-agent", DefaultUserAgent, "fetch User-Agent")
+	fs.Bool("allow-private-targets", false, "allow fetching private/loopback/link-local URLs (SSRF guard off)")
 
 	_ = v.BindPFlag(kPort, fs.Lookup("port"))
 	_ = v.BindPFlag(kOllamaURL, fs.Lookup("ollama-url"))
@@ -77,6 +81,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kLLMTimeout, fs.Lookup("llm-timeout"))
 	_ = v.BindPFlag(kMaxTextChars, fs.Lookup("max-text-chars"))
 	_ = v.BindPFlag(kUserAgent, fs.Lookup("user-agent"))
+	_ = v.BindPFlag(kAllowPrivate, fs.Lookup("allow-private-targets"))
 }
 
 func parseCategories(csv string) []string {
@@ -102,5 +107,6 @@ func Load(v *viper.Viper) (Config, error) {
 		LLMTimeout:      v.GetDuration(kLLMTimeout),
 		MaxTextChars:    v.GetInt(kMaxTextChars),
 		UserAgent:       v.GetString(kUserAgent),
+		AllowPrivate:    v.GetBool(kAllowPrivate),
 	}, nil
 }

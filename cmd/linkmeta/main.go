@@ -62,7 +62,7 @@ func run(v *viper.Viper) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	metrics.MustRegister(prometheus.DefaultRegisterer)
 
-	f := fetch.New(cfg.FetchTimeout, cfg.UserAgent, 3<<20)
+	f := fetch.New(cfg.FetchTimeout, cfg.UserAgent, 3<<20, cfg.AllowPrivate)
 	ollama := llm.NewOllama(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaKeepAlive, cfg.LLMTimeout)
 	svc := service.New(cfg, f, ollama, log)
 	api := httpapi.NewAPI(svc, ollama, cfg, log)
