@@ -1,0 +1,70 @@
+version: 2
+project_name: linkmeta
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: linkmeta
+    main: ./cmd/linkmeta
+    binary: linkmeta
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt
+
+dockers:
+  - image_templates:
+      - techblog/linkmeta:{{ .Version }}-amd64
+    goarch: amd64
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --build-arg=VERSION={{ .Version }}
+  - image_templates:
+      - techblog/linkmeta:{{ .Version }}-arm64
+    goarch: arm64
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - --platform=linux/arm64
+      - --build-arg=VERSION={{ .Version }}
+  - image_templates:
+      - techblog/linkmeta:{{ .Version }}-armv7
+    goarch: arm
+    goarm: "7"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - --platform=linux/arm/v7
+      - --build-arg=VERSION={{ .Version }}
+
+docker_manifests:
+  - name_template: techblog/linkmeta:{{ .Version }}
+    image_templates:
+      - techblog/linkmeta:{{ .Version }}-amd64
+      - techblog/linkmeta:{{ .Version }}-arm64
+      - techblog/linkmeta:{{ .Version }}-armv7
+  - name_template: techblog/linkmeta:latest
+    image_templates:
+      - techblog/linkmeta:{{ .Version }}-amd64
+      - techblog/linkmeta:{{ .Version }}-arm64
+      - techblog/linkmeta:{{ .Version }}-armv7
