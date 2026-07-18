@@ -53,3 +53,6 @@ scans/
 
 # Local config / data
 config.yaml
+
+# Compiled binary at repo root
+/linkmeta
