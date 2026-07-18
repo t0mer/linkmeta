@@ -3,6 +3,7 @@ module github.com/t0mer/linkmeta
 go 1.25.11
 
 require (
+	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -14,8 +15,11 @@ require (
 require (
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
