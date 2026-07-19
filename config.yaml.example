@@ -11,6 +11,11 @@ ollama_keep_alive: 24h
 # Closed category list (English). category is always chosen from this list.
 categories: Technology,News,Social,Food,Health,Shopping,Finance,Education,Entertainment,Travel,Science,Sports,Home,Other
 
+# Language of the returned category label. Default English (strict, enum-guaranteed).
+# Any other value (e.g. Hebrew, Spanish) returns a best-effort translated label.
+# Overridable per request with the `lang` parameter on /extract.
+category_language: English
+
 # Timeouts / limits
 fetch_timeout: 20s
 llm_timeout: 180s          # CPU-only inference is slow; keep this generous

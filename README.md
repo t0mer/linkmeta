@@ -57,8 +57,8 @@ Extract metadata for a URL.
 | | |
 |---|---|
 | **Methods** | `GET` (query param) or `POST` (JSON body) |
-| **GET param** | `url` — the page URL (http/https) |
-| **POST body** | `{"url": "https://..."}` |
+| **GET params** | `url` — the page URL (http/https); `lang` *(optional)* — category output language |
+| **POST body** | `{"url": "https://...", "lang": "English"}` (`lang` optional) |
 | **Success** | `200` with the metadata JSON below |
 | **Validation error** | `400` `{"error": "..."}` — missing url, non-http(s) scheme, or empty host |
 | **Fetch error** | `502` `{"error": "..."}` — the page could not be fetched |
@@ -75,6 +75,25 @@ The response schema is **frozen** (matches the n8n parser):
 ```
 
 `keywords` is always an array (`[]`, never `null`). `category` is always one of the configured categories; it falls back to `"Other"` if the LLM is unavailable.
+
+#### Category language (`lang`)
+
+By default the `category` is returned in **English** (strict — `enum`-constrained to the configured `CATEGORIES` list, so a Hebrew page still yields an English category). You can change the category's output language:
+
+- **Globally** via `CATEGORY_LANGUAGE` (see [Configuration](#configuration)).
+- **Per request** via the optional `lang` parameter, which overrides the global default for that call.
+
+The page is always *classified* against the canonical English list; `lang` only changes the language of the returned label. English keeps the strict enum guarantee; any other language (e.g. `Hebrew`, `Spanish`) returns a **best-effort translated** label. `lang` only affects `category` — `description` and `keywords` stay in the page's original language. On LLM failure the category still falls back to `"Other"`.
+
+```bash
+# Hebrew page, but force an English category (this is also the default):
+curl 'http://localhost:8080/extract?url=https://www.ynet.co.il/news&lang=English'
+
+# Return the category translated to Hebrew instead:
+curl -X POST http://localhost:8080/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://go.dev/blog/", "lang": "Hebrew"}'
+```
 
 **GET example**
 
@@ -210,6 +229,7 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `OLLAMA_MODEL` | `--ollama-model` | `qwen2.5:3b-instruct` | Model (better Hebrew than Llama) |
 | `OLLAMA_KEEP_ALIVE` | `--ollama-keep-alive` | `24h` | Keep the model resident between calls |
 | `CATEGORIES` | `--categories` | *(14-item list below)* | Comma-separated closed list |
+| `CATEGORY_LANGUAGE` | `--category-language` | `English` | Language of the returned category label (per-request override: `lang`) |
 | `FETCH_TIMEOUT` | `--fetch-timeout` | `20s` | Page fetch timeout |
 | `LLM_TIMEOUT` | `--llm-timeout` | `180s` | CPU inference is slow — keep generous |
 | `MAX_TEXT_CHARS` | `--max-text-chars` | `3000` | Readable text sent to the model (rune-safe) |
@@ -231,6 +251,7 @@ ollama_url: http://localhost:11434
 ollama_model: qwen2.5:3b-instruct
 ollama_keep_alive: 24h
 categories: Technology,News,Social,Food,Health,Shopping,Finance,Education,Entertainment,Travel,Science,Sports,Home,Other
+category_language: English
 fetch_timeout: 20s
 llm_timeout: 180s
 max_text_chars: 3000
@@ -263,7 +284,7 @@ Replace the three AI nodes with a single HTTP Request node.
 | Method | `POST` |
 | URL | `http://<linkmeta-host>:8080/extract` |
 | Body Content Type | JSON |
-| Body | `{"url": "{{ $('Exctract URL').item.json.url }}"}` |
+| Body | `{"url": "{{ $('Exctract URL').item.json.url }}"}` (add `"lang": "English"` to force the category language per request) |
 | Options → Timeout | **`240000`** ms (must exceed `LLM_TIMEOUT`) |
 
 Example node body (n8n expression):
