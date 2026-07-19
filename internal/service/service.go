@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/t0mer/linkmeta/internal/config"
@@ -55,9 +56,10 @@ func ValidateURL(raw string) error {
 	return nil
 }
 
-// Extract runs the full pipeline. Returns an error ONLY when the fetch fails;
-// LLM failure degrades gracefully to category "Other".
-func (s *Service) Extract(ctx context.Context, rawURL string) (Response, error) {
+// Extract runs the full pipeline. lang overrides the configured category
+// language for this request (blank uses the configured default). Returns an
+// error ONLY when the fetch fails; LLM failure degrades gracefully to "Other".
+func (s *Service) Extract(ctx context.Context, rawURL, lang string) (Response, error) {
 	res, err := s.f.Fetch(ctx, rawURL)
 	if err != nil {
 		s.log.Warn("fetch failed", "url", rawURL, "stage", "fetch", "err", err)
@@ -73,11 +75,12 @@ func (s *Service) Extract(ctx context.Context, rawURL string) (Response, error) 
 	needKeywords := len(meta.Keywords) == 0
 
 	llmReq := llm.Request{
-		Title:           meta.Title,
-		Description:     meta.Description,
-		NeedDescription: needDesc,
-		NeedKeywords:    needKeywords,
-		Categories:      s.cfg.Categories,
+		Title:            meta.Title,
+		Description:      meta.Description,
+		NeedDescription:  needDesc,
+		NeedKeywords:     needKeywords,
+		Categories:       s.cfg.Categories,
+		CategoryLanguage: s.effectiveLang(lang),
 	}
 	// Only pay for readable-text extraction when the model needs page content.
 	if needDesc || needKeywords {
@@ -119,6 +122,18 @@ func (s *Service) Extract(ctx context.Context, rawURL string) (Response, error) 
 		resp.Title = hostname(res.FinalURL, rawURL)
 	}
 	return resp, nil
+}
+
+// effectiveLang resolves the category language: request lang (trimmed) →
+// configured default → "English".
+func (s *Service) effectiveLang(reqLang string) string {
+	if l := strings.TrimSpace(reqLang); l != "" {
+		return l
+	}
+	if l := strings.TrimSpace(s.cfg.CategoryLanguage); l != "" {
+		return l
+	}
+	return "English"
 }
 
 func hostname(finalURL, rawURL string) string {

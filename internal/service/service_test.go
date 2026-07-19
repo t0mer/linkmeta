@@ -34,10 +34,60 @@ func (f fakeLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error
 }
 func (f fakeLLM) Version(ctx context.Context) error { return nil }
 
+// captureLLM records the last request so tests can assert the effective language.
+type captureLLM struct{ last llm.Request }
+
+func (c *captureLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error) {
+	c.last = r
+	return llm.Result{Category: "News"}, nil
+}
+func (c *captureLLM) Version(ctx context.Context) error { return nil }
+
 func testCfg() config.Config {
 	return config.Config{
-		Categories:   []string{"News", "Technology", "Other"},
-		MaxTextChars: 3000,
+		Categories:       []string{"News", "Technology", "Other"},
+		CategoryLanguage: "English",
+		MaxTextChars:     3000,
+	}
+}
+
+func TestExtractRequestLangOverridesConfig(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	cap := &captureLLM{}
+	s := New(testCfg(), fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
+	if _, err := s.Extract(context.Background(), "http://x.com", "Hebrew"); err != nil {
+		t.Fatal(err)
+	}
+	if cap.last.CategoryLanguage != "Hebrew" {
+		t.Errorf("effective lang = %q, want Hebrew", cap.last.CategoryLanguage)
+	}
+}
+
+func TestExtractBlankLangUsesConfigDefault(t *testing.T) {
+	cfg := testCfg()
+	cfg.CategoryLanguage = "Spanish"
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	cap := &captureLLM{}
+	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
+	if _, err := s.Extract(context.Background(), "http://x.com", "  "); err != nil {
+		t.Fatal(err)
+	}
+	if cap.last.CategoryLanguage != "Spanish" {
+		t.Errorf("effective lang = %q, want Spanish (config default)", cap.last.CategoryLanguage)
+	}
+}
+
+func TestExtractBlankEverywhereFallsBackToEnglish(t *testing.T) {
+	cfg := testCfg()
+	cfg.CategoryLanguage = ""
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	cap := &captureLLM{}
+	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
+	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if cap.last.CategoryLanguage != "English" {
+		t.Errorf("effective lang = %q, want English", cap.last.CategoryLanguage)
 	}
 }
 
@@ -48,7 +98,7 @@ func TestExtractDeterministicWins(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Keywords: []string{"x"}, Category: "Technology"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com")
+	resp, err := s.Extract(context.Background(), "http://x.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +118,7 @@ func TestExtractLLMFillsGaps(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "Filled", Keywords: []string{"k1", "k2"}, Category: "News"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, _ := s.Extract(context.Background(), "http://x.com")
+	resp, _ := s.Extract(context.Background(), "http://x.com", "")
 	if resp.Description != "Filled" || resp.Category != "News" {
 		t.Errorf("resp = %+v", resp)
 	}
@@ -82,7 +132,7 @@ func TestExtractLLMFailureDegrades(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{err: errors.New("ollama down")}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com")
+	resp, err := s.Extract(context.Background(), "http://x.com", "")
 	if err != nil {
 		t.Fatalf("LLM failure must not error: %v", err)
 	}
@@ -99,7 +149,7 @@ func TestExtractEmptyTitleUsesHostname(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://example.com/page"}
 	l := fakeLLM{res: llm.Result{Category: "Other"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, _ := s.Extract(context.Background(), "http://example.com/page")
+	resp, _ := s.Extract(context.Background(), "http://example.com/page", "")
 	if resp.Title != "example.com" {
 		t.Errorf("title = %q, want example.com", resp.Title)
 	}
@@ -108,7 +158,7 @@ func TestExtractEmptyTitleUsesHostname(t *testing.T) {
 func TestExtractFetchFailureErrors(t *testing.T) {
 	f := fakeFetcher{err: errors.New("boom")}
 	s := New(testCfg(), f, fakeLLM{}, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com"); err == nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", ""); err == nil {
 		t.Fatal("expected error on fetch failure")
 	}
 }
