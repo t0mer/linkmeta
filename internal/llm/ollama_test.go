@@ -78,6 +78,38 @@ func TestSchemaOnlyIncludesNeededFields(t *testing.T) {
 	}
 }
 
+func TestSchemaCategoryEnumForEnglish(t *testing.T) {
+	// English (default/blank/any case) -> category enum-constrained.
+	for _, lang := range []string{"", "English", "english"} {
+		schema := buildSchema(Request{Categories: []string{"News", "Other"}, CategoryLanguage: lang})
+		if !hasCategoryEnum(schema) {
+			t.Errorf("lang=%q: category should be enum-constrained", lang)
+		}
+	}
+}
+
+func TestSchemaCategoryFreeStringForNonEnglish(t *testing.T) {
+	schema := buildSchema(Request{Categories: []string{"News", "Other"}, CategoryLanguage: "Hebrew"})
+	if hasCategoryEnum(schema) {
+		t.Error("non-English category should be a free string, not enum")
+	}
+}
+
+// hasCategoryEnum reports whether the category property carries an enum.
+func hasCategoryEnum(schema map[string]any) bool {
+	props := schema["properties"].(map[string]any)
+	cat := props["category"].(map[string]any)
+	_, ok := cat["enum"]
+	return ok
+}
+
+func TestPromptIncludesCategoryLanguage(t *testing.T) {
+	p := buildPrompt(Request{Title: "t", Categories: []string{"News"}, CategoryLanguage: "Hebrew"})
+	if !strings.Contains(p, "Hebrew") {
+		t.Errorf("prompt missing category language: %q", p)
+	}
+}
+
 func TestVersionReachability(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/version" {

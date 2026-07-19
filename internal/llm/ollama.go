@@ -19,6 +19,10 @@ type Request struct {
 	NeedDescription bool
 	NeedKeywords    bool
 	Categories      []string
+	// CategoryLanguage is the language the category label is returned in.
+	// Empty or "English" (case-insensitive) keeps the strict enum guarantee;
+	// any other value renders a best-effort translated label (free string).
+	CategoryLanguage string
 }
 
 // Result holds only requested fields.
@@ -52,6 +56,13 @@ func NewOllama(baseURL, model, keepAlive string, timeout time.Duration) *Ollama 
 	}
 }
 
+// isEnglish reports whether the category language is English (the default).
+// Blank counts as English.
+func isEnglish(lang string) bool {
+	s := strings.ToLower(strings.TrimSpace(lang))
+	return s == "" || s == "english" || s == "en"
+}
+
 // buildSchema builds a JSON schema with only the needed properties; category is
 // always present and enum-constrained to the configured list.
 func buildSchema(req Request) map[string]any {
@@ -68,7 +79,13 @@ func buildSchema(req Request) map[string]any {
 		}
 		required = append(required, "keywords")
 	}
-	props["category"] = map[string]any{"type": "string", "enum": req.Categories}
+	// English keeps the strict enum guarantee; other languages need a free
+	// string because the returned label is translated out of the English list.
+	if isEnglish(req.CategoryLanguage) {
+		props["category"] = map[string]any{"type": "string", "enum": req.Categories}
+	} else {
+		props["category"] = map[string]any{"type": "string"}
+	}
 	required = append(required, "category")
 	return map[string]any{
 		"type":       "object",
@@ -87,7 +104,12 @@ func buildPrompt(req Request) string {
 	if req.NeedKeywords {
 		b.WriteString("- keywords: 3-10 lowercase topical keywords in the page's ORIGINAL language.\n")
 	}
-	b.WriteString("- category: choose exactly one from the allowed list (English).\n\n")
+	catLang := req.CategoryLanguage
+	if catLang == "" {
+		catLang = "English"
+	}
+	fmt.Fprintf(&b, "- category: classify into exactly one of the allowed English categories, "+
+		"then return the category name in %s.\n\n", catLang)
 	b.WriteString("Title: " + req.Title + "\n")
 	if req.Description != "" {
 		b.WriteString("Description: " + req.Description + "\n")
