@@ -17,16 +17,17 @@ const defaultCategories = "Technology,News,Social,Food,Health,Shopping,Finance,"
 
 // Config holds all runtime settings.
 type Config struct {
-	Port            int
-	OllamaURL       string
-	OllamaModel     string
-	OllamaKeepAlive string
-	Categories      []string
-	FetchTimeout    time.Duration
-	LLMTimeout      time.Duration
-	MaxTextChars    int
-	UserAgent       string
-	AllowPrivate    bool
+	Port             int
+	OllamaURL        string
+	OllamaModel      string
+	OllamaKeepAlive  string
+	Categories       []string
+	CategoryLanguage string
+	FetchTimeout     time.Duration
+	LLMTimeout       time.Duration
+	MaxTextChars     int
+	UserAgent        string
+	AllowPrivate     bool
 }
 
 // viper keys double as env var names (AutomaticEnv upper-cases the key).
@@ -36,6 +37,7 @@ const (
 	kOllamaModel  = "OLLAMA_MODEL"
 	kOllamaKeep   = "OLLAMA_KEEP_ALIVE"
 	kCategories   = "CATEGORIES"
+	kCategoryLang = "CATEGORY_LANGUAGE"
 	kFetchTimeout = "FETCH_TIMEOUT"
 	kLLMTimeout   = "LLM_TIMEOUT"
 	kMaxTextChars = "MAX_TEXT_CHARS"
@@ -49,6 +51,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kOllamaModel, "qwen2.5:3b-instruct")
 	v.SetDefault(kOllamaKeep, "24h")
 	v.SetDefault(kCategories, defaultCategories)
+	v.SetDefault(kCategoryLang, "English")
 	v.SetDefault(kFetchTimeout, "20s")
 	v.SetDefault(kLLMTimeout, "180s")
 	v.SetDefault(kMaxTextChars, 3000)
@@ -66,6 +69,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.String("ollama-model", "qwen2.5:3b-instruct", "Ollama model")
 	fs.String("ollama-keep-alive", "24h", "Ollama keep_alive")
 	fs.String("categories", defaultCategories, "comma-separated category list")
+	fs.String("category-language", "English", "language for the returned category label")
 	fs.Duration("fetch-timeout", 20*time.Second, "page fetch timeout")
 	fs.Duration("llm-timeout", 180*time.Second, "LLM call timeout")
 	fs.Int("max-text-chars", 3000, "max readable chars sent to model")
@@ -77,11 +81,20 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kOllamaModel, fs.Lookup("ollama-model"))
 	_ = v.BindPFlag(kOllamaKeep, fs.Lookup("ollama-keep-alive"))
 	_ = v.BindPFlag(kCategories, fs.Lookup("categories"))
+	_ = v.BindPFlag(kCategoryLang, fs.Lookup("category-language"))
 	_ = v.BindPFlag(kFetchTimeout, fs.Lookup("fetch-timeout"))
 	_ = v.BindPFlag(kLLMTimeout, fs.Lookup("llm-timeout"))
 	_ = v.BindPFlag(kMaxTextChars, fs.Lookup("max-text-chars"))
 	_ = v.BindPFlag(kUserAgent, fs.Lookup("user-agent"))
 	_ = v.BindPFlag(kAllowPrivate, fs.Lookup("allow-private-targets"))
+}
+
+// categoryLanguage trims the configured value and defaults blanks to English.
+func categoryLanguage(raw string) string {
+	if s := strings.TrimSpace(raw); s != "" {
+		return s
+	}
+	return "English"
 }
 
 func parseCategories(csv string) []string {
@@ -98,15 +111,16 @@ func parseCategories(csv string) []string {
 // Load materializes a Config from viper.
 func Load(v *viper.Viper) (Config, error) {
 	return Config{
-		Port:            v.GetInt(kPort),
-		OllamaURL:       strings.TrimRight(v.GetString(kOllamaURL), "/"),
-		OllamaModel:     v.GetString(kOllamaModel),
-		OllamaKeepAlive: v.GetString(kOllamaKeep),
-		Categories:      parseCategories(v.GetString(kCategories)),
-		FetchTimeout:    v.GetDuration(kFetchTimeout),
-		LLMTimeout:      v.GetDuration(kLLMTimeout),
-		MaxTextChars:    v.GetInt(kMaxTextChars),
-		UserAgent:       v.GetString(kUserAgent),
-		AllowPrivate:    v.GetBool(kAllowPrivate),
+		Port:             v.GetInt(kPort),
+		OllamaURL:        strings.TrimRight(v.GetString(kOllamaURL), "/"),
+		OllamaModel:      v.GetString(kOllamaModel),
+		OllamaKeepAlive:  v.GetString(kOllamaKeep),
+		Categories:       parseCategories(v.GetString(kCategories)),
+		CategoryLanguage: categoryLanguage(v.GetString(kCategoryLang)),
+		FetchTimeout:     v.GetDuration(kFetchTimeout),
+		LLMTimeout:       v.GetDuration(kLLMTimeout),
+		MaxTextChars:     v.GetInt(kMaxTextChars),
+		UserAgent:        v.GetString(kUserAgent),
+		AllowPrivate:     v.GetBool(kAllowPrivate),
 	}, nil
 }

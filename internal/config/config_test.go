@@ -26,6 +26,20 @@ func TestLoadDefaults(t *testing.T) {
 	if len(c.Categories) != 14 || c.Categories[0] != "Technology" {
 		t.Errorf("categories = %v", c.Categories)
 	}
+	if c.CategoryLanguage != "English" {
+		t.Errorf("CategoryLanguage = %q, want English", c.CategoryLanguage)
+	}
+}
+
+func TestCategoryLanguageEnvOverride(t *testing.T) {
+	t.Setenv("CATEGORY_LANGUAGE", "Hebrew")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	c, _ := Load(v)
+	if c.CategoryLanguage != "Hebrew" {
+		t.Errorf("CategoryLanguage = %q, want Hebrew", c.CategoryLanguage)
+	}
 }
 
 func TestEnvOverride(t *testing.T) {
