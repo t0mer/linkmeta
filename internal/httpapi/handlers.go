@@ -36,18 +36,21 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 }
 
 func (a *API) handleExtract(w http.ResponseWriter, r *http.Request) {
-	var rawURL string
+	var rawURL, lang string
 	if r.Method == http.MethodPost {
 		var body struct {
-			URL string `json:"url"`
+			URL  string `json:"url"`
+			Lang string `json:"lang"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
 		rawURL = body.URL
+		lang = body.Lang
 	} else {
 		rawURL = r.URL.Query().Get("url")
+		lang = r.URL.Query().Get("lang")
 	}
 
 	if rawURL == "" {
@@ -59,7 +62,7 @@ func (a *API) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := a.svc.Extract(r.Context(), rawURL)
+	resp, err := a.svc.Extract(r.Context(), rawURL, lang)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

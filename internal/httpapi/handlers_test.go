@@ -28,6 +28,15 @@ func (s stubLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error
 }
 func (s stubLLM) Version(ctx context.Context) error { return s.verErr }
 
+// captureLLM records the request so a test can assert the language reached the LLM.
+type captureLLM struct{ last llm.Request }
+
+func (c *captureLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error) {
+	c.last = r
+	return llm.Result{Category: "News"}, nil
+}
+func (c *captureLLM) Version(ctx context.Context) error { return nil }
+
 func newAPI(f service.Fetcher, l llm.Client) *API {
 	cfg := config.Config{Categories: []string{"News", "Other"}, OllamaModel: "m", MaxTextChars: 3000}
 	svc := service.New(cfg, f, l, slog.Default())
@@ -85,6 +94,37 @@ func TestExtractMissingURL400(t *testing.T) {
 	api.Router().ServeHTTP(rec, req)
 	if rec.Code != 400 {
 		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestExtractLangFromQuery(t *testing.T) {
+	html := []byte(`<html><head><title>Hi</title></head></html>`)
+	cap := &captureLLM{}
+	api := newAPI(stubFetcher{html: html}, cap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/extract?url=http://x.com&lang=Hebrew", nil)
+	api.Router().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if cap.last.CategoryLanguage != "Hebrew" {
+		t.Errorf("lang = %q, want Hebrew", cap.last.CategoryLanguage)
+	}
+}
+
+func TestExtractLangFromBody(t *testing.T) {
+	html := []byte(`<html><head><title>Hi</title></head></html>`)
+	cap := &captureLLM{}
+	api := newAPI(stubFetcher{html: html}, cap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/extract", strings.NewReader(`{"url":"http://x.com","lang":"Spanish"}`))
+	req.Header.Set("Content-Type", "application/json")
+	api.Router().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if cap.last.CategoryLanguage != "Spanish" {
+		t.Errorf("lang = %q, want Spanish", cap.last.CategoryLanguage)
 	}
 }
 
