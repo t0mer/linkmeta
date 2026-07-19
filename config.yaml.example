@@ -1,0 +1,29 @@
+# linkmeta configuration (optional). Precedence: flags > env > this file.
+# Copy to config.yaml and edit. Env var equivalents are the UPPER_SNAKE keys.
+
+port: 8080
+
+# Ollama
+ollama_url: http://localhost:11434
+ollama_model: qwen2.5:3b-instruct
+ollama_keep_alive: 24h
+
+# Closed category list (English). category is always chosen from this list.
+categories: Technology,News,Social,Food,Health,Shopping,Finance,Education,Entertainment,Travel,Science,Sports,Home,Other
+
+# Language of the returned category label. Default English (strict, enum-guaranteed).
+# Any other value (e.g. Hebrew, Spanish) returns a best-effort translated label.
+# Overridable per request with the `lang` parameter on /extract.
+category_language: English
+
+# Timeouts / limits
+fetch_timeout: 20s
+llm_timeout: 180s          # CPU-only inference is slow; keep this generous
+max_text_chars: 3000       # readable text sent to the model (rune-safe truncation)
+
+# Fetch behaviour
+user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+# SSRF guard: by default private/loopback/link-local targets are refused.
+# Set true only if you deliberately bookmark internal URLs.
+allow_private_targets: false
