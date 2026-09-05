@@ -33,6 +33,11 @@ type Config struct {
 	// ForceLLM makes the model generate description and keywords even when the
 	// page supplies them; its answers then win the merge. Title stays deterministic.
 	ForceLLM bool
+	// LLMProvider selects the backend: "ollama" (default, self-hosted) or
+	// "anthropic" (Claude API, with Ollama kept as the fallback).
+	LLMProvider     string
+	AnthropicAPIKey string
+	AnthropicModel  string
 }
 
 // viper keys double as env var names (AutomaticEnv upper-cases the key).
@@ -50,6 +55,9 @@ const (
 	kUserAgent    = "USER_AGENT"
 	kAllowPrivate = "ALLOW_PRIVATE_TARGETS"
 	kForceLLM     = "FORCE_LLM"
+	kLLMProvider  = "LLM_PROVIDER"
+	kAnthropicKey = "ANTHROPIC_API_KEY"
+	kAnthropicMdl = "ANTHROPIC_MODEL"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -66,6 +74,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kUserAgent, DefaultUserAgent)
 	v.SetDefault(kAllowPrivate, false)
 	v.SetDefault(kForceLLM, false)
+	v.SetDefault(kLLMProvider, "ollama")
+	v.SetDefault(kAnthropicKey, "")
+	v.SetDefault(kAnthropicMdl, "claude-opus-5")
 }
 
 // SetDefaults applies default values on v (exported wrapper for main).
@@ -86,6 +97,8 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.String("user-agent", DefaultUserAgent, "fetch User-Agent")
 	fs.Bool("allow-private-targets", false, "allow fetching private/loopback/link-local URLs (SSRF guard off)")
 	fs.Bool("force-llm", false, "always let the LLM write description and keywords, overriding the page's own meta tags")
+	fs.String("llm-provider", "ollama", "LLM backend: ollama (self-hosted) or anthropic (Claude API, falls back to ollama)")
+	fs.String("anthropic-model", "claude-opus-5", "Claude model when --llm-provider=anthropic")
 
 	_ = v.BindPFlag(kPort, fs.Lookup("port"))
 	_ = v.BindPFlag(kOllamaURL, fs.Lookup("ollama-url"))
@@ -100,6 +113,8 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kUserAgent, fs.Lookup("user-agent"))
 	_ = v.BindPFlag(kAllowPrivate, fs.Lookup("allow-private-targets"))
 	_ = v.BindPFlag(kForceLLM, fs.Lookup("force-llm"))
+	_ = v.BindPFlag(kLLMProvider, fs.Lookup("llm-provider"))
+	_ = v.BindPFlag(kAnthropicMdl, fs.Lookup("anthropic-model"))
 }
 
 // categoryLanguage trims the configured value and defaults blanks to English.
@@ -137,5 +152,8 @@ func Load(v *viper.Viper) (Config, error) {
 		UserAgent:        v.GetString(kUserAgent),
 		AllowPrivate:     v.GetBool(kAllowPrivate),
 		ForceLLM:         v.GetBool(kForceLLM),
+		LLMProvider:      strings.ToLower(strings.TrimSpace(v.GetString(kLLMProvider))),
+		AnthropicAPIKey:  strings.TrimSpace(v.GetString(kAnthropicKey)),
+		AnthropicModel:   strings.TrimSpace(v.GetString(kAnthropicMdl)),
 	}, nil
 }
