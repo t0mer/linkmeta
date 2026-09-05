@@ -319,6 +319,9 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `USER_AGENT` | `--user-agent` | realistic Chrome UA | Override for bot-blocking sites |
 | `ALLOW_PRIVATE_TARGETS` | `--allow-private-targets` | `false` | Allow fetching private/loopback URLs (SSRF guard off) |
 | `FORCE_LLM` | `--force-llm` | `false` | Always let the model write `description` and `keywords`, overriding the page's own meta tags |
+| `LLM_PROVIDER` | `--llm-provider` | `ollama` | Backend: `ollama` (self-hosted) or `anthropic` (Claude API, Ollama kept as fallback) |
+| `ANTHROPIC_API_KEY` | *(env only)* | — | Claude API key. Env var only — never put it in `config.yaml` |
+| `ANTHROPIC_MODEL` | `--anthropic-model` | `claude-opus-5` | Model used when `LLM_PROVIDER=anthropic` |
 
 Default categories:
 
@@ -349,6 +352,40 @@ force_llm: false
 ```bash
 ./linkmeta --port 8080 --ollama-model qwen2.5:3b-instruct --llm-timeout 240s --max-text-chars 2000
 ```
+
+### Using the Claude API instead of Ollama
+
+> **This trades away the project's core premise.** linkmeta exists to replace a cloud
+> AI dependency with self-hosted extraction. With `LLM_PROVIDER=anthropic`, the text of
+> every page you bookmark is sent to Anthropic. Use it only if you accept that.
+
+The self-hosted path stays the default. Opt in with:
+
+```bash
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...     # env var only — keep it out of config.yaml
+ANTHROPIC_MODEL=claude-opus-5    # optional; this is the default
+```
+
+**Ollama remains as the fallback.** Claude is tried first; if the call fails — outage,
+rate limit, expired key, no key configured — the request falls back to the local model
+rather than degrading straight to `category: "Other"`. Only when *both* fail does the
+usual degradation apply, and the error names both causes. Keep the Ollama sidecar
+running and its model pulled if you want that safety net.
+
+Why you might: on CPU-only hardware a full-content request takes ~100 s locally; the
+same request through the API returns in seconds, and no model needs to stay resident.
+Rough cost at linkmeta's prompt size (~1200 input, ~150 output tokens):
+
+| Model | Approx. per request | 20 bookmarks/day |
+|---|---|---|
+| `claude-opus-5` (default) | ~$0.010 | ~$6/month |
+| `claude-sonnet-5` | ~$0.004 | ~$2.40/month |
+| `claude-haiku-4-5` | ~$0.002 | ~$1.20/month |
+
+The same JSON schema constrains both backends (`output_config.format` on the API,
+`format` on Ollama), so `/extract` returns the identical response shape either way.
+`/healthz` reports `ollama: "ok"` when *either* backend is usable.
 
 ### Forcing the LLM
 
