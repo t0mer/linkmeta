@@ -315,6 +315,7 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `FETCH_TIMEOUT` | `--fetch-timeout` | `20s` | Page fetch timeout |
 | `LLM_TIMEOUT` | `--llm-timeout` | `180s` | CPU inference is slow — keep generous |
 | `MAX_TEXT_CHARS` | `--max-text-chars` | `3000` | Readable text sent to the model (rune-safe) |
+| `LLM_MAX_TOKENS` | `--llm-max-tokens` | `256` | Cap on generated tokens (Ollama `num_predict`). `0` = uncapped |
 | `USER_AGENT` | `--user-agent` | realistic Chrome UA | Override for bot-blocking sites |
 | `ALLOW_PRIVATE_TARGETS` | `--allow-private-targets` | `false` | Allow fetching private/loopback URLs (SSRF guard off) |
 | `FORCE_LLM` | `--force-llm` | `false` | Always let the model write `description` and `keywords`, overriding the page's own meta tags |
@@ -338,6 +339,7 @@ category_language: English
 fetch_timeout: 20s
 llm_timeout: 180s
 max_text_chars: 3000
+llm_max_tokens: 256
 allow_private_targets: false
 force_llm: false
 ```
@@ -425,7 +427,8 @@ Tuning tips for the 2-core arm64 / 12 GB target:
   docker compose exec ollama ollama pull qwen2.5:1.5b-instruct
   # then set OLLAMA_MODEL=qwen2.5:1.5b-instruct and restart linkmeta
   ```
-- **Reduce `MAX_TEXT_CHARS`** (e.g. 1500) to cut prompt size on the full-content path.
+- **Reduce `MAX_TEXT_CHARS`** (e.g. 1500) to cut prompt size on the full-content path. On CPU this is usually the single biggest win — prefill scales with prompt length, and the first ~1500 characters are normally enough to summarise and classify a page.
+- **`LLM_MAX_TOKENS` bounds generation** (default 256, Ollama's `num_predict`). The response schema needs very little output; without a cap, a model that pads the keywords array or repeats itself can run far longer than the answer warrants. Lower it (e.g. 128) if you only need a short description.
 - Only **one** LLM call is made per request, ever.
 - **`FORCE_LLM=true` pins every request to the full-content path** — there is no fast path while it is on. Budget for that latency, or leave it off and let the page's own metadata short-circuit the slow route.
 

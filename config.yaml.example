@@ -20,6 +20,7 @@ category_language: English
 fetch_timeout: 20s
 llm_timeout: 180s          # CPU-only inference is slow; keep this generous
 max_text_chars: 3000       # readable text sent to the model (rune-safe truncation)
+llm_max_tokens: 256        # cap on generated tokens (num_predict); 0 = uncapped
 
 # Fetch behaviour
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
