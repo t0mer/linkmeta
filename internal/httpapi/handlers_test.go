@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
+	"github.com/t0mer/linkmeta/internal/cache"
 	"github.com/t0mer/linkmeta/internal/config"
 	"github.com/t0mer/linkmeta/internal/fetch"
 	"github.com/t0mer/linkmeta/internal/llm"
@@ -246,10 +249,129 @@ func TestHealthzClearsLastErrorAfterSuccess(t *testing.T) {
 
 	// A later healthy call must clear the stale error.
 	svc2 := service.New(cfg, stubFetcher{html: html}, stubLLM{}, slog.Default())
-	if _, err := svc2.Extract(context.Background(), "http://x.com", ""); err != nil {
+	if _, err := svc2.Extract(context.Background(), "http://x.com", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if msg, _ := svc2.LastLLMError(); msg != "" {
 		t.Errorf("LastLLMError = %q after success, want empty", msg)
+	}
+}
+
+// newCachingAPI builds an API whose service has a live memory cache.
+func newCachingAPI(f service.Fetcher, l llm.Client) *API {
+	cfg := config.Config{
+		Categories: []string{"News", "Other"}, OllamaModel: "m", MaxTextChars: 3000,
+		CacheEnabled: true, CacheTTL: time.Hour, CacheDegradedTTL: time.Minute,
+	}
+	svc := service.New(cfg, f, l, slog.Default())
+	svc.SetCache(cache.NewMemory(10))
+	return NewAPI(svc, l, cfg, "test-version", slog.Default())
+}
+
+func TestExtractSetsCacheHeader(t *testing.T) {
+	html := []byte(`<html><head><title>Hi</title><meta name="description" content="d"><meta name="keywords" content="a,b"></head></html>`)
+	api := newCachingAPI(stubFetcher{html: html}, stubLLM{})
+
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/extract?url=http://x.com", nil))
+	if got := rec.Header().Get("X-Cache"); got != "MISS" {
+		t.Errorf("first X-Cache = %q, want MISS", got)
+	}
+
+	rec = httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/extract?url=http://x.com", nil))
+	if got := rec.Header().Get("X-Cache"); got != "HIT" {
+		t.Errorf("second X-Cache = %q, want HIT", got)
+	}
+
+	// The cached body must be byte-identical to the frozen schema (no extra fields).
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	for _, k := range []string{"title", "description", "category", "keywords"} {
+		if _, ok := body[k]; !ok {
+			t.Errorf("cached body missing %q", k)
+		}
+	}
+	if len(body) != 4 {
+		t.Errorf("cached body has %d fields, want the frozen 4: %v", len(body), body)
+	}
+}
+
+func TestExtractFreshQueryParamBypassesCache(t *testing.T) {
+	html := []byte(`<html><head><title>Hi</title></head></html>`)
+	api := newCachingAPI(stubFetcher{html: html}, stubLLM{})
+	api.Router().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/extract?url=http://x.com", nil))
+
+	for _, q := range []string{"fresh=true", "fresh=1"} {
+		rec := httptest.NewRecorder()
+		api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/extract?url=http://x.com&"+q, nil))
+		if got := rec.Header().Get("X-Cache"); got != "BYPASS" {
+			t.Errorf("X-Cache with %s = %q, want BYPASS", q, got)
+		}
+	}
+
+	// An unparseable value must not bypass silently.
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/extract?url=http://x.com&fresh=maybe", nil))
+	if got := rec.Header().Get("X-Cache"); got != "HIT" {
+		t.Errorf("X-Cache with fresh=maybe = %q, want HIT (unparseable is not a bypass)", got)
+	}
+}
+
+func TestExtractFreshInPOSTBody(t *testing.T) {
+	html := []byte(`<html><head><title>Hi</title></head></html>`)
+	api := newCachingAPI(stubFetcher{html: html}, stubLLM{})
+	api.Router().ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest("POST", "/extract", strings.NewReader(`{"url":"http://x.com"}`)))
+
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("POST", "/extract",
+		strings.NewReader(`{"url":"http://x.com","fresh":true}`)))
+	if got := rec.Header().Get("X-Cache"); got != "BYPASS" {
+		t.Errorf("X-Cache = %q, want BYPASS", got)
+	}
+}
+
+// pingableStore reports a configurable health, standing in for Redis.
+type pingableStore struct {
+	cache.Store
+	pingErr error
+}
+
+func (p pingableStore) Ping(ctx context.Context) error { return p.pingErr }
+
+func TestHealthzReportsCacheState(t *testing.T) {
+	// No store configured.
+	api := newAPI(stubFetcher{}, stubLLM{})
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	var h map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &h)
+	if h["cache"] != "disabled" {
+		t.Errorf("cache = %v, want disabled", h["cache"])
+	}
+
+	// Healthy store.
+	api = newCachingAPI(stubFetcher{}, stubLLM{})
+	rec = httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	json.Unmarshal(rec.Body.Bytes(), &h)
+	if h["cache"] != "ok" {
+		t.Errorf("cache = %v, want ok", h["cache"])
+	}
+}
+
+func TestHealthzReportsCacheUnavailable(t *testing.T) {
+	cfg := config.Config{Categories: []string{"News"}, OllamaModel: "m", CacheEnabled: true, CacheTTL: time.Hour}
+	svc := service.New(cfg, stubFetcher{}, stubLLM{}, slog.Default())
+	svc.SetCache(pingableStore{Store: cache.NewMemory(5), pingErr: errors.New("dial tcp: connection refused")})
+	api := NewAPI(svc, stubLLM{}, cfg, "v", slog.Default())
+
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	var h map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &h)
+	if h["cache"] != "unavailable" {
+		t.Errorf("cache = %v, want unavailable (a dead Redis must not look healthy)", h["cache"])
 	}
 }
