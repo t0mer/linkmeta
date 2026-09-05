@@ -24,6 +24,11 @@ max_text_chars: 3000       # readable text sent to the model (rune-safe truncati
 # Fetch behaviour
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
+# Always let the model write description and keywords, overriding the page's own
+# meta tags. Off by default (the page wins). Note: when on, every request takes the
+# slower full-content path. Title is always deterministic either way.
+force_llm: false
+
 # SSRF guard: by default private/loopback/link-local targets are refused.
 # Set true only if you deliberately bookmark internal URLs.
 allow_private_targets: false

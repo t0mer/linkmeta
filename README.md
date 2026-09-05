@@ -235,6 +235,7 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `MAX_TEXT_CHARS` | `--max-text-chars` | `3000` | Readable text sent to the model (rune-safe) |
 | `USER_AGENT` | `--user-agent` | realistic Chrome UA | Override for bot-blocking sites |
 | `ALLOW_PRIVATE_TARGETS` | `--allow-private-targets` | `false` | Allow fetching private/loopback URLs (SSRF guard off) |
+| `FORCE_LLM` | `--force-llm` | `false` | Always let the model write `description` and `keywords`, overriding the page's own meta tags |
 
 Default categories:
 
@@ -256,6 +257,7 @@ fetch_timeout: 20s
 llm_timeout: 180s
 max_text_chars: 3000
 allow_private_targets: false
+force_llm: false
 ```
 
 **Flag equivalents** (same effect as the env vars):
@@ -263,6 +265,31 @@ allow_private_targets: false
 ```bash
 ./linkmeta --port 8080 --ollama-model qwen2.5:3b-instruct --llm-timeout 240s --max-text-chars 2000
 ```
+
+### Forcing the LLM
+
+By default the page wins: `description` and `keywords` are taken from the page's own
+meta tags whenever it provides them, and the model is asked only for what is missing
+(plus `category`, which is always model-generated). Set `FORCE_LLM=true` (or
+`--force-llm`) to ignore those meta tags and have the model write both fields on every
+request — useful when pages carry boilerplate or marketing descriptions you would
+rather replace with a real summary of the content.
+
+```bash
+FORCE_LLM=true ./linkmeta
+```
+
+What changes when it is on:
+
+- `description` and `keywords` always come from the model; the page's values are not
+  even shown to it as context, so it summarises the content rather than paraphrasing
+  the existing tag.
+- Every request takes the **full-content path** — readable text is always extracted and
+  sent (up to `MAX_TEXT_CHARS`), so expect the slower latency described in
+  [Performance notes](#performance-notes) on every call.
+- `title` is unaffected — it always comes from `<title>` / `og:title`.
+- Degradation is unchanged: if Ollama fails, you still get the page's own description
+  and keywords with `category: "Other"`.
 
 > **Security note (SSRF):** by default linkmeta refuses to fetch URLs that resolve to loopback, private (RFC1918), link-local (incl. the cloud-metadata address `169.254.169.254`), or unique-local addresses — the guard runs on the resolved IP at dial time, on the initial request *and* every redirect hop. Set `ALLOW_PRIVATE_TARGETS=true` only if you deliberately bookmark internal URLs.
 
@@ -318,6 +345,7 @@ Tuning tips for the 2-core arm64 / 12 GB target:
   ```
 - **Reduce `MAX_TEXT_CHARS`** (e.g. 1500) to cut prompt size on the full-content path.
 - Only **one** LLM call is made per request, ever.
+- **`FORCE_LLM=true` pins every request to the full-content path** — there is no fast path while it is on. Budget for that latency, or leave it off and let the page's own metadata short-circuit the slow route.
 
 ---
 
