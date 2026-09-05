@@ -36,6 +36,10 @@ type Result struct {
 type Client interface {
 	Complete(ctx context.Context, req Request) (Result, error)
 	Version(ctx context.Context) error
+	// CheckModel reports whether the configured model is actually installed.
+	// Version() only proves the server is up: Ollama answers /api/version
+	// happily with zero models pulled, while every /api/chat then 404s.
+	CheckModel(ctx context.Context) error
 }
 
 // Ollama talks to an Ollama server over HTTP.
@@ -204,6 +208,32 @@ func (o *Ollama) Version(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("ollama version status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// CheckModel verifies the configured model exists on the server via POST
+// /api/show. It only reads metadata — the model is not loaded into memory.
+func (o *Ollama) CheckModel(ctx context.Context) error {
+	buf, err := json.Marshal(map[string]string{"model": o.model})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		o.baseURL+"/api/show", bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ollama show: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("model %q unavailable (status %d): %s",
+			o.model, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
