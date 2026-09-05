@@ -37,6 +37,14 @@ llm_provider: ollama
 anthropic_model: claude-opus-5
 # ANTHROPIC_API_KEY is read from the environment only — never store it here.
 
+# Cloudflare AI Gateway (optional): route Claude traffic through a gateway for
+# logging, analytics, rate limiting and spend caps. Both IDs are required together.
+# With Cloudflare storing your provider key (BYOK), AI_GATEWAY_TOKEN alone is enough
+# and ANTHROPIC_API_KEY can stay unset.
+# ai_gateway_account_id: ""
+# ai_gateway_id: ""
+# AI_GATEWAY_TOKEN is read from the environment only — never store it here.
+
 # Cache: repeated URLs skip both the page fetch and the LLM call.
 # Backend "memory" needs nothing extra; "redis" survives restarts (see redis_url).
 cache_enabled: true
