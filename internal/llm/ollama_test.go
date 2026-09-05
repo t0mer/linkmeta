@@ -146,3 +146,39 @@ func TestPromptKeepsPageDescriptionAsContextWhenNotGenerating(t *testing.T) {
 		t.Error("page description should stay as context when not regenerating it")
 	}
 }
+
+func TestCheckModelPresent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/show" {
+			t.Errorf("path = %s, want /api/show", r.URL.Path)
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] != "m1" {
+			t.Errorf("model = %v, want m1", body["model"])
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"details":{}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m1", "24h", 5*time.Second)
+	if err := o.CheckModel(context.Background()); err != nil {
+		t.Errorf("CheckModel = %v, want nil", err)
+	}
+}
+
+func TestCheckModelMissingReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":"model 'm1' not found"}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m1", "24h", 5*time.Second)
+	err := o.CheckModel(context.Background())
+	if err == nil {
+		t.Fatal("CheckModel = nil, want error for a missing model")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v, want the server message", err)
+	}
+}

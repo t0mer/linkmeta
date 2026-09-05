@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/t0mer/linkmeta/internal/config"
@@ -32,7 +33,8 @@ type fakeLLM struct {
 func (f fakeLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error) {
 	return f.res, f.err
 }
-func (f fakeLLM) Version(ctx context.Context) error { return nil }
+func (f fakeLLM) Version(ctx context.Context) error    { return nil }
+func (f fakeLLM) CheckModel(ctx context.Context) error { return nil }
 
 // captureLLM records the last request so tests can assert the effective language.
 type captureLLM struct{ last llm.Request }
@@ -41,7 +43,8 @@ func (c *captureLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, e
 	c.last = r
 	return llm.Result{Category: "News"}, nil
 }
-func (c *captureLLM) Version(ctx context.Context) error { return nil }
+func (c *captureLLM) Version(ctx context.Context) error    { return nil }
+func (c *captureLLM) CheckModel(ctx context.Context) error { return nil }
 
 func testCfg() config.Config {
 	return config.Config{
@@ -253,5 +256,30 @@ func TestExtractUnforcedStillPrefersPageMeta(t *testing.T) {
 	resp, _ := s.Extract(context.Background(), "http://x.com", "")
 	if resp.Description != "Page Desc" {
 		t.Errorf("description = %q, want Page Desc when not forced", resp.Description)
+	}
+}
+
+func TestLastLLMErrorRecordedAndCleared(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	f := fakeFetcher{html: html, url: "http://x.com"}
+
+	s := New(testCfg(), f, fakeLLM{err: errors.New("ollama status 404: model not found")}, slog.Default())
+	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	msg, at := s.LastLLMError()
+	if !strings.Contains(msg, "404") {
+		t.Errorf("LastLLMError = %q, want the ollama error", msg)
+	}
+	if at.IsZero() {
+		t.Error("LastLLMError timestamp is zero")
+	}
+
+	ok := New(testCfg(), f, fakeLLM{res: llm.Result{Category: "News"}}, slog.Default())
+	if _, err := ok.Extract(context.Background(), "http://x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := ok.LastLLMError(); msg != "" {
+		t.Errorf("LastLLMError = %q after a successful call, want empty", msg)
 	}
 }
