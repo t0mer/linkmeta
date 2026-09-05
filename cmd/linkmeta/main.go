@@ -84,10 +84,23 @@ func run(v *viper.Viper) error {
 	// straight to category "Other".
 	var llmClient llm.Client = ollama
 	if cfg.LLMProvider == "anthropic" {
-		if cfg.AnthropicAPIKey == "" {
-			log.Warn("llm provider is anthropic but ANTHROPIC_API_KEY is empty; every call will fall back to ollama")
+		var opts []llm.AnthropicOption
+		if cfg.AIGatewayEnabled() {
+			base := llm.CloudflareGatewayURL(cfg.AIGatewayAccountID, cfg.AIGatewayID)
+			opts = append(opts, llm.WithAnthropicBaseURL(base))
+			log.Info("routing anthropic traffic through cloudflare ai gateway",
+				"account", cfg.AIGatewayAccountID, "gateway", cfg.AIGatewayID,
+				"authenticated", cfg.AIGatewayToken != "")
 		}
-		claude := llm.NewAnthropic(cfg.AnthropicAPIKey, cfg.AnthropicModel, cfg.LLMTimeout)
+		if cfg.AIGatewayToken != "" {
+			opts = append(opts, llm.WithAnthropicGatewayToken(cfg.AIGatewayToken))
+		}
+		// A gateway token alone is enough when Cloudflare stores the provider key.
+		if cfg.AnthropicAPIKey == "" && cfg.AIGatewayToken == "" {
+			log.Warn("llm provider is anthropic but no credentials are set " +
+				"(ANTHROPIC_API_KEY or AI_GATEWAY_TOKEN); every call will fall back to ollama")
+		}
+		claude := llm.NewAnthropic(cfg.AnthropicAPIKey, cfg.AnthropicModel, cfg.LLMTimeout, opts...)
 		llmClient = llm.NewFallback(claude, ollama, log)
 	}
 	svc := service.New(cfg, f, llmClient, log)

@@ -356,6 +356,9 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `LLM_PROVIDER` | `--llm-provider` | `ollama` | Backend: `ollama` (self-hosted) or `anthropic` (Claude API, Ollama kept as fallback) |
 | `ANTHROPIC_API_KEY` | *(env only)* | — | Claude API key. Env var only — never put it in `config.yaml` |
 | `ANTHROPIC_MODEL` | `--anthropic-model` | `claude-opus-5` | Model used when `LLM_PROVIDER=anthropic` |
+| `AI_GATEWAY_ACCOUNT_ID` | `--ai-gateway-account-id` | — | Cloudflare account ID; with `AI_GATEWAY_ID`, routes Claude traffic through AI Gateway |
+| `AI_GATEWAY_ID` | `--ai-gateway-id` | — | Cloudflare AI Gateway name |
+| `AI_GATEWAY_TOKEN` | *(env only)* | — | Sent as `cf-aig-authorization`. Also counts as a credential (BYOK) |
 
 Default categories:
 
@@ -472,6 +475,43 @@ The same JSON schema constrains both backends (`output_config.format` on the API
 `format` on Ollama), so `/extract` returns the identical response shape either way.
 `/healthz` reports `ollama: "ok"` when *either* backend is usable.
 
+#### Routing through Cloudflare AI Gateway
+
+Claude traffic can go through [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
+for request logging, analytics, rate limiting, spend caps and retries. Set both IDs and
+linkmeta builds the endpoint for you:
+
+```bash
+LLM_PROVIDER=anthropic
+AI_GATEWAY_ACCOUNT_ID=<cloudflare account id>
+AI_GATEWAY_ID=<gateway name>
+AI_GATEWAY_TOKEN=<token>          # optional; required if the gateway is authenticated
+```
+
+Requests then go to
+`https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic/v1/messages`.
+Nothing else changes: same model, same schema, same Ollama fallback if the call fails —
+including when the *gateway* is the thing that fails.
+
+**Setting only one of the two IDs is a startup error.** Ignoring a half-configured
+gateway would silently send traffic and spend straight to Anthropic, which is exactly
+what you set the gateway up to prevent.
+
+**BYOK (keys stored in Cloudflare).** If your gateway holds the Anthropic key, set
+`AI_GATEWAY_TOKEN` and leave `ANTHROPIC_API_KEY` unset — linkmeta sends no `x-api-key`
+header at all and Cloudflare supplies the key. This keeps the provider key out of your
+compose file and off the linkmeta host entirely.
+
+Two caveats worth knowing:
+
+- **The gateway's cache sits behind linkmeta's.** A cached URL never leaves the process
+  (see [Caching](#caching)), so Cloudflare only ever sees misses and `fresh=true`
+  requests. Use the gateway for observability and control, not as your primary cache.
+- **`/healthz` probes through the gateway too.** The model check calls `/v1/models/{id}`
+  on the gateway base URL. If your gateway doesn't proxy that path, `/healthz` may report
+  `model-missing` while extraction works normally — check `last_llm_error` and an actual
+  `/extract` call before believing the health field.
+
 ### Forcing the LLM
 
 By default the page wins: `description` and `keywords` are taken from the page's own
@@ -576,6 +616,7 @@ leaves little headroom; a slower page or a busy box crosses it and degrades to `
 | `"ollama": "unreachable"` in `/healthz`; every category is `Other` | Ollama isn't running or `OLLAMA_URL` is wrong. The service still returns real deterministic metadata — it degrades, it does not fail. Start Ollama / fix the URL, and `ollama pull` the model. |
 | `"ollama": "model-missing"` in `/healthz`; every category is `Other` | The server is up but the model was never pulled — `ollama list` passes with zero models, so nothing else catches this. Run `docker compose exec ollama ollama pull qwen2.5:3b-instruct`. |
 | `last_llm_error` shows `context canceled` | The *client* hung up mid-inference — the caller's timeout is shorter than the request. This is what n8n produces when its node **Timeout** is below `LLM_TIMEOUT`; raise it (240000 ms recommended). Not a model or network fault. |
+| Startup fails with `AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_ID must be set together` | Only one of the two is set. Set both to use the gateway, or neither to call Anthropic directly — linkmeta refuses to quietly bypass a partly-configured gateway. |
 | `LLM_PROVIDER=anthropic` but responses are still slow | Claude calls are failing and every request is falling back to the local model. Check `last_llm_error` in `/healthz` — a missing/expired `ANTHROPIC_API_KEY` logs `no API key configured`, and the service warns about it at startup. |
 | Every category is `Other` and requests return in well under a second | No inference is happening — the `/api/chat` call is erroring instantly. Read `last_llm_error` in `/healthz` for the verbatim Ollama message (404 = model missing; 400 on `format` = Ollama older than 0.5.0, which predates structured outputs — upgrade it). |
 | A page's metadata is stale / you fixed something and want a re-run | The result is cached (24 h by default). Add `fresh=true` to re-extract and refresh the entry: `curl '.../extract?url=...&fresh=true'`. |

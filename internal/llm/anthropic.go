@@ -32,13 +32,45 @@ type Anthropic struct {
 	probeDone bool
 }
 
-// AnthropicOption configures the client (used by tests to retarget the base URL).
-type AnthropicOption func(*[]option.RequestOption)
+// cloudflareGatewayHost is the fixed host for Cloudflare AI Gateway.
+const cloudflareGatewayHost = "https://gateway.ai.cloudflare.com/v1"
 
-// WithAnthropicBaseURL points the client at an alternate endpoint.
+// CloudflareGatewayURL builds the Anthropic base URL for a Cloudflare AI Gateway:
+// https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic
+// The SDK appends /v1/messages to it.
+func CloudflareGatewayURL(accountID, gatewayID string) string {
+	return fmt.Sprintf("%s/%s/%s/anthropic",
+		cloudflareGatewayHost, strings.TrimSpace(accountID), strings.TrimSpace(gatewayID))
+}
+
+// anthropicSettings collects option-applied settings.
+type anthropicSettings struct {
+	reqOpts      []option.RequestOption
+	gatewayToken string
+}
+
+// AnthropicOption configures the client (base URL, gateway credentials).
+type AnthropicOption func(*anthropicSettings)
+
+// WithAnthropicBaseURL points the client at an alternate endpoint, such as a
+// Cloudflare AI Gateway (see CloudflareGatewayURL) or another proxy.
 func WithAnthropicBaseURL(url string) AnthropicOption {
-	return func(opts *[]option.RequestOption) {
-		*opts = append(*opts, option.WithBaseURL(url))
+	return func(s *anthropicSettings) {
+		s.reqOpts = append(s.reqOpts, option.WithBaseURL(url))
+	}
+}
+
+// WithAnthropicGatewayToken sends cf-aig-authorization on every request, for a
+// Cloudflare gateway with authentication enabled. It also counts as a credential:
+// with Cloudflare storing the provider key (BYOK), no local API key is needed.
+func WithAnthropicGatewayToken(token string) AnthropicOption {
+	return func(s *anthropicSettings) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return
+		}
+		s.gatewayToken = token
+		s.reqOpts = append(s.reqOpts, option.WithHeader("cf-aig-authorization", "Bearer "+token))
 	}
 }
 
@@ -48,18 +80,29 @@ func NewAnthropic(apiKey, model string, timeout time.Duration, opts ...Anthropic
 	if strings.TrimSpace(model) == "" {
 		model = DefaultAnthropicModel
 	}
-	reqOpts := []option.RequestOption{option.WithRequestTimeout(timeout)}
+	settings := anthropicSettings{
+		reqOpts: []option.RequestOption{option.WithRequestTimeout(timeout)},
+	}
 	if apiKey != "" {
-		reqOpts = append(reqOpts, option.WithAPIKey(apiKey))
+		settings.reqOpts = append(settings.reqOpts, option.WithAPIKey(apiKey))
 	}
 	for _, o := range opts {
-		o(&reqOpts)
+		o(&settings)
+	}
+	if apiKey == "" && settings.gatewayToken != "" {
+		// BYOK: Cloudflare holds the provider key. The SDK refuses to send a
+		// request with no credentials at all, so satisfy that check and then drop
+		// the header - forwarding a placeholder key upstream would fail auth.
+		settings.reqOpts = append(settings.reqOpts,
+			option.WithAPIKey("byok-via-gateway"), option.WithHeaderDel("x-api-key"))
 	}
 	return &Anthropic{
-		client:    anthropic.NewClient(reqOpts...),
+		client:    anthropic.NewClient(settings.reqOpts...),
 		model:     model,
 		maxTokens: 1024,
-		hasKey:    apiKey != "",
+		// A Cloudflare gateway token is a credential in its own right: with BYOK
+		// the gateway holds the provider key and no local key is required.
+		hasKey: apiKey != "" || settings.gatewayToken != "",
 	}
 }
 
@@ -68,7 +111,7 @@ func NewAnthropic(apiKey, model string, timeout time.Duration, opts ...Anthropic
 // identically on both backends.
 func (a *Anthropic) Complete(ctx context.Context, req Request) (Result, error) {
 	if !a.hasKey {
-		return Result{}, fmt.Errorf("anthropic: no API key configured")
+		return Result{}, fmt.Errorf("anthropic: no credentials configured (need ANTHROPIC_API_KEY or AI_GATEWAY_TOKEN)")
 	}
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
@@ -124,7 +167,7 @@ const anthropicProbeTTL = 60 * time.Second
 // health-check timer cannot turn into a request-per-scrape.
 func (a *Anthropic) probe(ctx context.Context) error {
 	if !a.hasKey {
-		return fmt.Errorf("anthropic: no API key configured")
+		return fmt.Errorf("anthropic: no credentials configured (need ANTHROPIC_API_KEY or AI_GATEWAY_TOKEN)")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

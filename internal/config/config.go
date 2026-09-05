@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,17 @@ type Config struct {
 	CacheDegradedTTL time.Duration
 	CacheMaxEntries  int
 	RedisURL         string
+	// Cloudflare AI Gateway. When account+gateway are set, Anthropic traffic is
+	// routed through the gateway for observability, rate limiting and spend caps.
+	AIGatewayAccountID string
+	AIGatewayID        string
+	AIGatewayToken     string
+}
+
+// AIGatewayEnabled reports whether Anthropic traffic should route through
+// Cloudflare AI Gateway.
+func (c Config) AIGatewayEnabled() bool {
+	return c.AIGatewayAccountID != "" && c.AIGatewayID != ""
 }
 
 // CacheFingerprint identifies the settings that shape an extraction result.
@@ -90,6 +102,9 @@ const (
 	kCacheDegTTL  = "CACHE_DEGRADED_TTL"
 	kCacheMaxEnt  = "CACHE_MAX_ENTRIES"
 	kRedisURL     = "REDIS_URL"
+	kGatewayAcct  = "AI_GATEWAY_ACCOUNT_ID"
+	kGatewayID    = "AI_GATEWAY_ID"
+	kGatewayToken = "AI_GATEWAY_TOKEN"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -115,6 +130,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kCacheDegTTL, "5m")
 	v.SetDefault(kCacheMaxEnt, 1000)
 	v.SetDefault(kRedisURL, "redis://localhost:6379")
+	v.SetDefault(kGatewayAcct, "")
+	v.SetDefault(kGatewayID, "")
+	v.SetDefault(kGatewayToken, "")
 }
 
 // SetDefaults applies default values on v (exported wrapper for main).
@@ -143,6 +161,8 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.Duration("cache-degraded-ttl", 5*time.Minute, "TTL for cached results produced while the LLM was failing")
 	fs.Int("cache-max-entries", 1000, "max entries for the memory cache backend")
 	fs.String("redis-url", "redis://localhost:6379", "Redis URL when --cache-backend=redis")
+	fs.String("ai-gateway-account-id", "", "Cloudflare account ID; with --ai-gateway-id routes Anthropic traffic through AI Gateway")
+	fs.String("ai-gateway-id", "", "Cloudflare AI Gateway name")
 
 	_ = v.BindPFlag(kPort, fs.Lookup("port"))
 	_ = v.BindPFlag(kOllamaURL, fs.Lookup("ollama-url"))
@@ -165,6 +185,8 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kCacheDegTTL, fs.Lookup("cache-degraded-ttl"))
 	_ = v.BindPFlag(kCacheMaxEnt, fs.Lookup("cache-max-entries"))
 	_ = v.BindPFlag(kRedisURL, fs.Lookup("redis-url"))
+	_ = v.BindPFlag(kGatewayAcct, fs.Lookup("ai-gateway-account-id"))
+	_ = v.BindPFlag(kGatewayID, fs.Lookup("ai-gateway-id"))
 }
 
 // categoryLanguage trims the configured value and defaults blanks to English.
@@ -188,28 +210,40 @@ func parseCategories(csv string) []string {
 
 // Load materializes a Config from viper.
 func Load(v *viper.Viper) (Config, error) {
-	return Config{
-		Port:             v.GetInt(kPort),
-		OllamaURL:        strings.TrimRight(v.GetString(kOllamaURL), "/"),
-		OllamaModel:      v.GetString(kOllamaModel),
-		OllamaKeepAlive:  v.GetString(kOllamaKeep),
-		Categories:       parseCategories(v.GetString(kCategories)),
-		CategoryLanguage: categoryLanguage(v.GetString(kCategoryLang)),
-		FetchTimeout:     v.GetDuration(kFetchTimeout),
-		LLMTimeout:       v.GetDuration(kLLMTimeout),
-		MaxTextChars:     v.GetInt(kMaxTextChars),
-		LLMMaxTokens:     v.GetInt(kLLMMaxTokens),
-		UserAgent:        v.GetString(kUserAgent),
-		AllowPrivate:     v.GetBool(kAllowPrivate),
-		ForceLLM:         v.GetBool(kForceLLM),
-		LLMProvider:      strings.ToLower(strings.TrimSpace(v.GetString(kLLMProvider))),
-		AnthropicAPIKey:  strings.TrimSpace(v.GetString(kAnthropicKey)),
-		AnthropicModel:   strings.TrimSpace(v.GetString(kAnthropicMdl)),
-		CacheEnabled:     v.GetBool(kCacheEnabled),
-		CacheBackend:     strings.ToLower(strings.TrimSpace(v.GetString(kCacheBackend))),
-		CacheTTL:         v.GetDuration(kCacheTTL),
-		CacheDegradedTTL: v.GetDuration(kCacheDegTTL),
-		CacheMaxEntries:  v.GetInt(kCacheMaxEnt),
-		RedisURL:         strings.TrimSpace(v.GetString(kRedisURL)),
-	}, nil
+	cfg := Config{
+		Port:               v.GetInt(kPort),
+		OllamaURL:          strings.TrimRight(v.GetString(kOllamaURL), "/"),
+		OllamaModel:        v.GetString(kOllamaModel),
+		OllamaKeepAlive:    v.GetString(kOllamaKeep),
+		Categories:         parseCategories(v.GetString(kCategories)),
+		CategoryLanguage:   categoryLanguage(v.GetString(kCategoryLang)),
+		FetchTimeout:       v.GetDuration(kFetchTimeout),
+		LLMTimeout:         v.GetDuration(kLLMTimeout),
+		MaxTextChars:       v.GetInt(kMaxTextChars),
+		LLMMaxTokens:       v.GetInt(kLLMMaxTokens),
+		UserAgent:          v.GetString(kUserAgent),
+		AllowPrivate:       v.GetBool(kAllowPrivate),
+		ForceLLM:           v.GetBool(kForceLLM),
+		LLMProvider:        strings.ToLower(strings.TrimSpace(v.GetString(kLLMProvider))),
+		AnthropicAPIKey:    strings.TrimSpace(v.GetString(kAnthropicKey)),
+		AnthropicModel:     strings.TrimSpace(v.GetString(kAnthropicMdl)),
+		CacheEnabled:       v.GetBool(kCacheEnabled),
+		CacheBackend:       strings.ToLower(strings.TrimSpace(v.GetString(kCacheBackend))),
+		CacheTTL:           v.GetDuration(kCacheTTL),
+		CacheDegradedTTL:   v.GetDuration(kCacheDegTTL),
+		CacheMaxEntries:    v.GetInt(kCacheMaxEnt),
+		RedisURL:           strings.TrimSpace(v.GetString(kRedisURL)),
+		AIGatewayAccountID: strings.TrimSpace(v.GetString(kGatewayAcct)),
+		AIGatewayID:        strings.TrimSpace(v.GetString(kGatewayID)),
+		AIGatewayToken:     strings.TrimSpace(v.GetString(kGatewayToken)),
+	}
+
+	// Half-configured is refused rather than ignored: falling back to a direct
+	// Anthropic call would put traffic and spend outside the gateway.
+	if (cfg.AIGatewayAccountID == "") != (cfg.AIGatewayID == "") {
+		return Config{}, fmt.Errorf(
+			"AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_ID must be set together (got account=%q gateway=%q)",
+			cfg.AIGatewayAccountID, cfg.AIGatewayID)
+	}
+	return cfg, nil
 }

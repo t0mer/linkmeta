@@ -219,3 +219,58 @@ func TestCacheFingerprintTracksExtractionSettings(t *testing.T) {
 		t.Error("fingerprint is not deterministic")
 	}
 }
+
+func TestAIGatewayDefaultsEmpty(t *testing.T) {
+	v := viper.New()
+	setDefaults(v)
+	c, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AIGatewayAccountID != "" || c.AIGatewayID != "" || c.AIGatewayToken != "" {
+		t.Errorf("gateway config = %q/%q/%q, want empty", c.AIGatewayAccountID, c.AIGatewayID, c.AIGatewayToken)
+	}
+	if c.AIGatewayEnabled() {
+		t.Error("AIGatewayEnabled = true with nothing configured")
+	}
+}
+
+func TestAIGatewayEnvOverride(t *testing.T) {
+	t.Setenv("AI_GATEWAY_ACCOUNT_ID", " acct123 ")
+	t.Setenv("AI_GATEWAY_ID", "my-gw")
+	t.Setenv("AI_GATEWAY_TOKEN", "cf-token")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	c, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AIGatewayAccountID != "acct123" || c.AIGatewayID != "my-gw" || c.AIGatewayToken != "cf-token" {
+		t.Errorf("gateway config = %q/%q/%q", c.AIGatewayAccountID, c.AIGatewayID, c.AIGatewayToken)
+	}
+	if !c.AIGatewayEnabled() {
+		t.Error("AIGatewayEnabled = false with account+gateway set")
+	}
+}
+
+func TestHalfConfiguredGatewayIsAStartupError(t *testing.T) {
+	// Silently going direct would send traffic and spend outside the gateway.
+	for _, env := range []map[string]string{
+		{"AI_GATEWAY_ACCOUNT_ID": "acct123"},
+		{"AI_GATEWAY_ID": "my-gw"},
+	} {
+		v := viper.New()
+		setDefaults(v)
+		for k, val := range env {
+			t.Setenv(k, val)
+		}
+		v.AutomaticEnv()
+		if _, err := Load(v); err == nil {
+			t.Errorf("Load with %v = nil error, want a startup error", env)
+		}
+		for k := range env {
+			t.Setenv(k, "")
+		}
+	}
+}
