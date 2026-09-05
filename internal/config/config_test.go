@@ -125,3 +125,34 @@ func TestLLMMaxTokensDefaultAndOverride(t *testing.T) {
 		t.Errorf("LLMMaxTokens = %d, want 96 from env", c2.LLMMaxTokens)
 	}
 }
+
+func TestLLMProviderDefaultsToOllama(t *testing.T) {
+	v := viper.New()
+	setDefaults(v)
+	c, _ := Load(v)
+	if c.LLMProvider != "ollama" {
+		t.Errorf("LLMProvider = %q, want ollama (self-hosted stays the default)", c.LLMProvider)
+	}
+	if c.AnthropicModel != "claude-opus-5" {
+		t.Errorf("AnthropicModel = %q, want claude-opus-5", c.AnthropicModel)
+	}
+	if c.AnthropicAPIKey != "" {
+		t.Errorf("AnthropicAPIKey = %q, want empty", c.AnthropicAPIKey)
+	}
+}
+
+func TestLLMProviderEnvOverride(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "ANTHROPIC")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	c, _ := Load(v)
+	if c.LLMProvider != "anthropic" {
+		t.Errorf("LLMProvider = %q, want normalized to anthropic", c.LLMProvider)
+	}
+	if c.AnthropicAPIKey != "sk-test" || c.AnthropicModel != "claude-sonnet-5" {
+		t.Errorf("anthropic config = %q/%q", c.AnthropicAPIKey, c.AnthropicModel)
+	}
+}
