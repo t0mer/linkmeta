@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +41,29 @@ type Config struct {
 	LLMProvider     string
 	AnthropicAPIKey string
 	AnthropicModel  string
+	// Cache settings. A repeated URL is served from cache, costing neither a
+	// page fetch nor an LLM call.
+	CacheEnabled     bool
+	CacheBackend     string
+	CacheTTL         time.Duration
+	CacheDegradedTTL time.Duration
+	CacheMaxEntries  int
+	RedisURL         string
+}
+
+// CacheFingerprint identifies the settings that shape an extraction result.
+// It is part of every cache key so entries that outlive a config change (Redis
+// persists across restarts) are not served under the new configuration.
+func (c Config) CacheFingerprint() string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strconv.FormatBool(c.ForceLLM),
+		c.LLMProvider,
+		c.OllamaModel,
+		c.AnthropicModel,
+		c.CategoryLanguage,
+		strings.Join(c.Categories, ","),
+	}, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // viper keys double as env var names (AutomaticEnv upper-cases the key).
@@ -58,6 +84,12 @@ const (
 	kLLMProvider  = "LLM_PROVIDER"
 	kAnthropicKey = "ANTHROPIC_API_KEY"
 	kAnthropicMdl = "ANTHROPIC_MODEL"
+	kCacheEnabled = "CACHE_ENABLED"
+	kCacheBackend = "CACHE_BACKEND"
+	kCacheTTL     = "CACHE_TTL"
+	kCacheDegTTL  = "CACHE_DEGRADED_TTL"
+	kCacheMaxEnt  = "CACHE_MAX_ENTRIES"
+	kRedisURL     = "REDIS_URL"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -77,6 +109,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kLLMProvider, "ollama")
 	v.SetDefault(kAnthropicKey, "")
 	v.SetDefault(kAnthropicMdl, "claude-opus-5")
+	v.SetDefault(kCacheEnabled, true)
+	v.SetDefault(kCacheBackend, "memory")
+	v.SetDefault(kCacheTTL, "24h")
+	v.SetDefault(kCacheDegTTL, "5m")
+	v.SetDefault(kCacheMaxEnt, 1000)
+	v.SetDefault(kRedisURL, "redis://localhost:6379")
 }
 
 // SetDefaults applies default values on v (exported wrapper for main).
@@ -99,6 +137,12 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.Bool("force-llm", false, "always let the LLM write description and keywords, overriding the page's own meta tags")
 	fs.String("llm-provider", "ollama", "LLM backend: ollama (self-hosted) or anthropic (Claude API, falls back to ollama)")
 	fs.String("anthropic-model", "claude-opus-5", "Claude model when --llm-provider=anthropic")
+	fs.Bool("cache-enabled", true, "cache /extract results")
+	fs.String("cache-backend", "memory", "cache backend: memory or redis")
+	fs.Duration("cache-ttl", 24*time.Hour, "TTL for cached successful results")
+	fs.Duration("cache-degraded-ttl", 5*time.Minute, "TTL for cached results produced while the LLM was failing")
+	fs.Int("cache-max-entries", 1000, "max entries for the memory cache backend")
+	fs.String("redis-url", "redis://localhost:6379", "Redis URL when --cache-backend=redis")
 
 	_ = v.BindPFlag(kPort, fs.Lookup("port"))
 	_ = v.BindPFlag(kOllamaURL, fs.Lookup("ollama-url"))
@@ -115,6 +159,12 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kForceLLM, fs.Lookup("force-llm"))
 	_ = v.BindPFlag(kLLMProvider, fs.Lookup("llm-provider"))
 	_ = v.BindPFlag(kAnthropicMdl, fs.Lookup("anthropic-model"))
+	_ = v.BindPFlag(kCacheEnabled, fs.Lookup("cache-enabled"))
+	_ = v.BindPFlag(kCacheBackend, fs.Lookup("cache-backend"))
+	_ = v.BindPFlag(kCacheTTL, fs.Lookup("cache-ttl"))
+	_ = v.BindPFlag(kCacheDegTTL, fs.Lookup("cache-degraded-ttl"))
+	_ = v.BindPFlag(kCacheMaxEnt, fs.Lookup("cache-max-entries"))
+	_ = v.BindPFlag(kRedisURL, fs.Lookup("redis-url"))
 }
 
 // categoryLanguage trims the configured value and defaults blanks to English.
@@ -155,5 +205,11 @@ func Load(v *viper.Viper) (Config, error) {
 		LLMProvider:      strings.ToLower(strings.TrimSpace(v.GetString(kLLMProvider))),
 		AnthropicAPIKey:  strings.TrimSpace(v.GetString(kAnthropicKey)),
 		AnthropicModel:   strings.TrimSpace(v.GetString(kAnthropicMdl)),
+		CacheEnabled:     v.GetBool(kCacheEnabled),
+		CacheBackend:     strings.ToLower(strings.TrimSpace(v.GetString(kCacheBackend))),
+		CacheTTL:         v.GetDuration(kCacheTTL),
+		CacheDegradedTTL: v.GetDuration(kCacheDegTTL),
+		CacheMaxEntries:  v.GetInt(kCacheMaxEnt),
+		RedisURL:         strings.TrimSpace(v.GetString(kRedisURL)),
 	}, nil
 }

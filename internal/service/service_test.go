@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/t0mer/linkmeta/internal/cache"
 	"github.com/t0mer/linkmeta/internal/config"
 	"github.com/t0mer/linkmeta/internal/fetch"
 	"github.com/t0mer/linkmeta/internal/llm"
@@ -58,7 +60,7 @@ func TestExtractRequestLangOverridesConfig(t *testing.T) {
 	html := []byte(`<html><head><title>T</title></head></html>`)
 	cap := &captureLLM{}
 	s := New(testCfg(), fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", "Hebrew"); err != nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "Hebrew", false); err != nil {
 		t.Fatal(err)
 	}
 	if cap.last.CategoryLanguage != "Hebrew" {
@@ -72,7 +74,7 @@ func TestExtractBlankLangUsesConfigDefault(t *testing.T) {
 	html := []byte(`<html><head><title>T</title></head></html>`)
 	cap := &captureLLM{}
 	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", "  "); err != nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "  ", false); err != nil {
 		t.Fatal(err)
 	}
 	if cap.last.CategoryLanguage != "Spanish" {
@@ -86,7 +88,7 @@ func TestExtractBlankEverywhereFallsBackToEnglish(t *testing.T) {
 	html := []byte(`<html><head><title>T</title></head></html>`)
 	cap := &captureLLM{}
 	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if cap.last.CategoryLanguage != "English" {
@@ -101,7 +103,7 @@ func TestExtractDeterministicWins(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Keywords: []string{"x"}, Category: "Technology"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +123,7 @@ func TestExtractLLMFillsGaps(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "Filled", Keywords: []string{"k1", "k2"}, Category: "News"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, _ := s.Extract(context.Background(), "http://x.com", "")
+	resp, _ := s.Extract(context.Background(), "http://x.com", "", false)
 	if resp.Description != "Filled" || resp.Category != "News" {
 		t.Errorf("resp = %+v", resp)
 	}
@@ -135,7 +137,7 @@ func TestExtractLLMFailureDegrades(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{err: errors.New("ollama down")}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
 	if err != nil {
 		t.Fatalf("LLM failure must not error: %v", err)
 	}
@@ -152,7 +154,7 @@ func TestExtractEmptyTitleUsesHostname(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://example.com/page"}
 	l := fakeLLM{res: llm.Result{Category: "Other"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, _ := s.Extract(context.Background(), "http://example.com/page", "")
+	resp, _ := s.Extract(context.Background(), "http://example.com/page", "", false)
 	if resp.Title != "example.com" {
 		t.Errorf("title = %q, want example.com", resp.Title)
 	}
@@ -161,7 +163,7 @@ func TestExtractEmptyTitleUsesHostname(t *testing.T) {
 func TestExtractFetchFailureErrors(t *testing.T) {
 	f := fakeFetcher{err: errors.New("boom")}
 	s := New(testCfg(), f, fakeLLM{}, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", ""); err == nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "", false); err == nil {
 		t.Fatal("expected error on fetch failure")
 	}
 }
@@ -190,7 +192,7 @@ func TestExtractForceLLMOverridesPageMeta(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Keywords: []string{"LLM-KW"}, Category: "Technology"}}
 	s := New(cfg, f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +218,7 @@ func TestExtractForceLLMRequestsAllFieldsAndSendsText(t *testing.T) {
 	cfg.ForceLLM = true
 	cap := &captureLLM{}
 	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if !cap.last.NeedDescription || !cap.last.NeedKeywords {
@@ -235,7 +237,7 @@ func TestExtractForceLLMFailureKeepsPageValues(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{err: errors.New("ollama down")}
 	s := New(cfg, f, l, slog.Default())
-	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
 	if err != nil {
 		t.Fatalf("LLM failure must not error even when forced: %v", err)
 	}
@@ -253,7 +255,7 @@ func TestExtractUnforcedStillPrefersPageMeta(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Category: "News"}}
 	s := New(testCfg(), f, l, slog.Default())
-	resp, _ := s.Extract(context.Background(), "http://x.com", "")
+	resp, _ := s.Extract(context.Background(), "http://x.com", "", false)
 	if resp.Description != "Page Desc" {
 		t.Errorf("description = %q, want Page Desc when not forced", resp.Description)
 	}
@@ -264,7 +266,7 @@ func TestLastLLMErrorRecordedAndCleared(t *testing.T) {
 	f := fakeFetcher{html: html, url: "http://x.com"}
 
 	s := New(testCfg(), f, fakeLLM{err: errors.New("ollama status 404: model not found")}, slog.Default())
-	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+	if _, err := s.Extract(context.Background(), "http://x.com", "", false); err != nil {
 		t.Fatal(err)
 	}
 	msg, at := s.LastLLMError()
@@ -276,10 +278,189 @@ func TestLastLLMErrorRecordedAndCleared(t *testing.T) {
 	}
 
 	ok := New(testCfg(), f, fakeLLM{res: llm.Result{Category: "News"}}, slog.Default())
-	if _, err := ok.Extract(context.Background(), "http://x.com", ""); err != nil {
+	if _, err := ok.Extract(context.Background(), "http://x.com", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if msg, _ := ok.LastLLMError(); msg != "" {
 		t.Errorf("LastLLMError = %q after a successful call, want empty", msg)
 	}
 }
+
+// countingFetcher records how many times the page was actually fetched.
+type countingFetcher struct {
+	html  []byte
+	url   string
+	calls int
+}
+
+func (c *countingFetcher) Fetch(ctx context.Context, u string) (fetch.Result, error) {
+	c.calls++
+	return fetch.Result{HTML: c.html, FinalURL: c.url}, nil
+}
+
+func cacheTestCfg() config.Config {
+	cfg := testCfg()
+	cfg.CacheEnabled = true
+	cfg.CacheTTL = time.Hour
+	cfg.CacheDegradedTTL = 50 * time.Millisecond
+	return cfg
+}
+
+func TestExtractServesSecondRequestFromCache(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	f := &countingFetcher{html: html, url: "http://x.com"}
+	l := &countingLLM{res: llm.Result{Category: "News"}}
+	s := New(cacheTestCfg(), f, l, slog.Default())
+	s.SetCache(cache.NewMemory(10))
+
+	first, err := s.Extract(context.Background(), "http://x.com", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CacheStatus != "MISS" {
+		t.Errorf("first CacheStatus = %q, want MISS", first.CacheStatus)
+	}
+
+	second, err := s.Extract(context.Background(), "http://x.com", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.CacheStatus != "HIT" {
+		t.Errorf("second CacheStatus = %q, want HIT", second.CacheStatus)
+	}
+	if second.Category != first.Category || second.Title != first.Title {
+		t.Errorf("cached response differs: %+v vs %+v", second, first)
+	}
+	if f.calls != 1 {
+		t.Errorf("fetches = %d, want 1 (a hit must skip the page fetch)", f.calls)
+	}
+	if l.calls != 1 {
+		t.Errorf("llm calls = %d, want 1 (a hit must skip the model)", l.calls)
+	}
+}
+
+func TestExtractFreshBypassesReadButRepopulates(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	f := &countingFetcher{html: html, url: "http://x.com"}
+	l := &countingLLM{res: llm.Result{Category: "News"}}
+	s := New(cacheTestCfg(), f, l, slog.Default())
+	s.SetCache(cache.NewMemory(10))
+
+	if _, err := s.Extract(context.Background(), "http://x.com", "", false); err != nil {
+		t.Fatal(err)
+	}
+	bypass, err := s.Extract(context.Background(), "http://x.com", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bypass.CacheStatus != "BYPASS" {
+		t.Errorf("CacheStatus = %q, want BYPASS", bypass.CacheStatus)
+	}
+	if f.calls != 2 {
+		t.Errorf("fetches = %d, want 2 (fresh must re-fetch)", f.calls)
+	}
+	// The bypassed request must still refresh the entry for the next caller.
+	after, _ := s.Extract(context.Background(), "http://x.com", "", false)
+	if after.CacheStatus != "HIT" {
+		t.Errorf("CacheStatus = %q, want HIT (fresh must repopulate)", after.CacheStatus)
+	}
+	if f.calls != 2 {
+		t.Errorf("fetches = %d, want 2", f.calls)
+	}
+}
+
+func TestExtractCachesPerLanguage(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	f := &countingFetcher{html: html, url: "http://x.com"}
+	s := New(cacheTestCfg(), f, &countingLLM{res: llm.Result{Category: "News"}}, slog.Default())
+	s.SetCache(cache.NewMemory(10))
+
+	if _, err := s.Extract(context.Background(), "http://x.com", "English", false); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.Extract(context.Background(), "http://x.com", "Hebrew", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.CacheStatus == "HIT" {
+		t.Error("a Hebrew request was served the English cache entry")
+	}
+}
+
+func TestExtractDegradedResultGetsShortTTL(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	f := &countingFetcher{html: html, url: "http://x.com"}
+	s := New(cacheTestCfg(), f, &countingLLM{err: errors.New("llm down")}, slog.Default())
+	s.SetCache(cache.NewMemory(10))
+
+	first, _ := s.Extract(context.Background(), "http://x.com", "", false)
+	if first.Category != "Other" {
+		t.Fatalf("category = %q, want Other", first.Category)
+	}
+	// Within the short TTL it is served from cache...
+	if hit, _ := s.Extract(context.Background(), "http://x.com", "", false); hit.CacheStatus != "HIT" {
+		t.Errorf("CacheStatus = %q, want HIT inside the degraded TTL", hit.CacheStatus)
+	}
+	// ...but it must expire quickly so a fixed model is picked up.
+	time.Sleep(80 * time.Millisecond)
+	if miss, _ := s.Extract(context.Background(), "http://x.com", "", false); miss.CacheStatus != "MISS" {
+		t.Errorf("CacheStatus = %q, want MISS after the degraded TTL", miss.CacheStatus)
+	}
+}
+
+func TestExtractWithoutCacheStillWorks(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	s := New(testCfg(), &countingFetcher{html: html, url: "http://x.com"},
+		&countingLLM{res: llm.Result{Category: "News"}}, slog.Default())
+
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Category != "News" {
+		t.Errorf("category = %q", resp.Category)
+	}
+	if resp.CacheStatus != "DISABLED" {
+		t.Errorf("CacheStatus = %q, want DISABLED when no store is configured", resp.CacheStatus)
+	}
+}
+
+func TestExtractCacheErrorDegradesToNormalExtraction(t *testing.T) {
+	html := []byte(`<html><head><title>T</title></head></html>`)
+	s := New(cacheTestCfg(), &countingFetcher{html: html, url: "http://x.com"},
+		&countingLLM{res: llm.Result{Category: "News"}}, slog.Default())
+	s.SetCache(brokenStore{})
+
+	resp, err := s.Extract(context.Background(), "http://x.com", "", false)
+	if err != nil {
+		t.Fatalf("a cache outage must not fail the request: %v", err)
+	}
+	if resp.Category != "News" {
+		t.Errorf("category = %q, want a normally extracted result", resp.Category)
+	}
+}
+
+// brokenStore fails every operation, standing in for a dead Redis.
+type brokenStore struct{}
+
+func (brokenStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	return nil, false, errors.New("redis down")
+}
+func (brokenStore) Set(ctx context.Context, key string, val []byte, ttl time.Duration) error {
+	return errors.New("redis down")
+}
+func (brokenStore) Close() error { return nil }
+
+// countingLLM records call count so cache hits can be proven to skip the model.
+type countingLLM struct {
+	res   llm.Result
+	err   error
+	calls int
+}
+
+func (c *countingLLM) Complete(ctx context.Context, r llm.Request) (llm.Result, error) {
+	c.calls++
+	return c.res, c.err
+}
+func (c *countingLLM) Version(ctx context.Context) error    { return nil }
+func (c *countingLLM) CheckModel(ctx context.Context) error { return nil }

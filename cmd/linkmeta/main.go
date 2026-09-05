@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/t0mer/linkmeta/internal/cache"
 	"github.com/t0mer/linkmeta/internal/config"
 	"github.com/t0mer/linkmeta/internal/fetch"
 	"github.com/t0mer/linkmeta/internal/httpapi"
@@ -38,6 +39,18 @@ func main() {
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// buildCache constructs the configured cache backend.
+func buildCache(cfg config.Config) (cache.Store, error) {
+	switch cfg.CacheBackend {
+	case "redis":
+		return cache.NewRedis(cfg.RedisURL, 2*time.Second)
+	case "memory", "":
+		return cache.NewMemory(cfg.CacheMaxEntries), nil
+	default:
+		return nil, fmt.Errorf("unknown cache backend %q", cfg.CacheBackend)
 	}
 }
 
@@ -78,6 +91,19 @@ func run(v *viper.Viper) error {
 		llmClient = llm.NewFallback(claude, ollama, log)
 	}
 	svc := service.New(cfg, f, llmClient, log)
+
+	// Cache is best-effort: a backend that cannot be built is logged and skipped
+	// rather than fatal, so a Redis misconfiguration never takes the service down.
+	if cfg.CacheEnabled {
+		store, err := buildCache(cfg)
+		if err != nil {
+			log.Error("cache disabled: backend unavailable", "backend", cfg.CacheBackend, "err", err)
+		} else {
+			log.Info("cache enabled", "backend", cfg.CacheBackend, "ttl", cfg.CacheTTL)
+			svc.SetCache(store)
+			defer store.Close()
+		}
+	}
 	api := httpapi.NewAPI(svc, llmClient, cfg, version, log)
 
 	srv := &http.Server{

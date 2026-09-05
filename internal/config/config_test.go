@@ -156,3 +156,66 @@ func TestLLMProviderEnvOverride(t *testing.T) {
 		t.Errorf("anthropic config = %q/%q", c.AnthropicAPIKey, c.AnthropicModel)
 	}
 }
+
+func TestCacheDefaults(t *testing.T) {
+	v := viper.New()
+	setDefaults(v)
+	c, _ := Load(v)
+	if !c.CacheEnabled {
+		t.Error("CacheEnabled = false, want true by default")
+	}
+	if c.CacheBackend != "memory" {
+		t.Errorf("CacheBackend = %q, want memory", c.CacheBackend)
+	}
+	if c.CacheTTL != 24*time.Hour {
+		t.Errorf("CacheTTL = %v, want 24h", c.CacheTTL)
+	}
+	if c.CacheDegradedTTL != 5*time.Minute {
+		t.Errorf("CacheDegradedTTL = %v, want 5m", c.CacheDegradedTTL)
+	}
+	if c.CacheMaxEntries != 1000 {
+		t.Errorf("CacheMaxEntries = %d, want 1000", c.CacheMaxEntries)
+	}
+}
+
+func TestCacheEnvOverride(t *testing.T) {
+	t.Setenv("CACHE_BACKEND", "REDIS")
+	t.Setenv("CACHE_TTL", "1h")
+	t.Setenv("CACHE_ENABLED", "false")
+	t.Setenv("REDIS_URL", "redis://cache:6379/1")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	c, _ := Load(v)
+	if c.CacheBackend != "redis" {
+		t.Errorf("CacheBackend = %q, want normalized to redis", c.CacheBackend)
+	}
+	if c.CacheTTL != time.Hour || c.CacheEnabled || c.RedisURL != "redis://cache:6379/1" {
+		t.Errorf("cache config = %v/%v/%q", c.CacheTTL, c.CacheEnabled, c.RedisURL)
+	}
+}
+
+func TestCacheFingerprintTracksExtractionSettings(t *testing.T) {
+	base := Config{ForceLLM: false, LLMProvider: "ollama", OllamaModel: "m", Categories: []string{"A", "B"}}
+	if base.CacheFingerprint() == "" {
+		t.Fatal("empty fingerprint")
+	}
+	forced := base
+	forced.ForceLLM = true
+	if base.CacheFingerprint() == forced.CacheFingerprint() {
+		t.Error("fingerprint ignores FORCE_LLM; cached results would survive the flag flip")
+	}
+	other := base
+	other.Categories = []string{"A", "C"}
+	if base.CacheFingerprint() == other.CacheFingerprint() {
+		t.Error("fingerprint ignores the category list")
+	}
+	claude := base
+	claude.LLMProvider = "anthropic"
+	if base.CacheFingerprint() == claude.CacheFingerprint() {
+		t.Error("fingerprint ignores the provider")
+	}
+	if base.CacheFingerprint() != base.CacheFingerprint() {
+		t.Error("fingerprint is not deterministic")
+	}
+}

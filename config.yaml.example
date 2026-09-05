@@ -37,6 +37,15 @@ llm_provider: ollama
 anthropic_model: claude-opus-5
 # ANTHROPIC_API_KEY is read from the environment only — never store it here.
 
+# Cache: repeated URLs skip both the page fetch and the LLM call.
+# Backend "memory" needs nothing extra; "redis" survives restarts (see redis_url).
+cache_enabled: true
+cache_backend: memory
+cache_ttl: 24h
+cache_degraded_ttl: 5m      # results produced while the LLM was failing
+cache_max_entries: 1000     # memory backend only
+redis_url: redis://localhost:6379
+
 # SSRF guard: by default private/loopback/link-local targets are refused.
 # Set true only if you deliberately bookmark internal URLs.
 allow_private_targets: false
