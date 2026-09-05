@@ -30,6 +30,13 @@ user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gec
 # slower full-content path. Title is always deterministic either way.
 force_llm: false
 
+# LLM backend: "ollama" (default, self-hosted) or "anthropic" (Claude API).
+# With "anthropic", Ollama is kept as the fallback when the API call fails.
+# NOTE: with "anthropic", page content leaves your network — see the README.
+llm_provider: ollama
+anthropic_model: claude-opus-5
+# ANTHROPIC_API_KEY is read from the environment only — never store it here.
+
 # SSRF guard: by default private/loopback/link-local targets are refused.
 # Set true only if you deliberately bookmark internal URLs.
 allow_private_targets: false
