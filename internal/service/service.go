@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/t0mer/linkmeta/internal/config"
@@ -34,6 +35,13 @@ type Service struct {
 	f   Fetcher
 	llm llm.Client
 	log *slog.Logger
+
+	// Last LLM failure, surfaced by /healthz. Degradation is silent by design
+	// (the caller still gets metadata), so without this a broken model looks
+	// healthy from the outside.
+	mu        sync.RWMutex
+	lastErr   string
+	lastErrAt time.Time
 }
 
 // New builds a Service.
@@ -107,8 +115,10 @@ func (s *Service) Extract(ctx context.Context, rawURL, lang string) (Response, e
 		metrics.LLMCallsTotal.WithLabelValues("error").Inc()
 		metrics.FallbackTotal.Inc()
 		s.log.Warn("llm failed; degrading", "url", rawURL, "stage", "llm", "err", err)
+		s.recordLLMError(err)
 	} else {
 		metrics.LLMCallsTotal.WithLabelValues("ok").Inc()
+		s.recordLLMError(nil)
 		if llmRes.Category != "" {
 			resp.Category = llmRes.Category
 		}
@@ -124,6 +134,26 @@ func (s *Service) Extract(ctx context.Context, rawURL, lang string) (Response, e
 		resp.Title = hostname(res.FinalURL, rawURL)
 	}
 	return resp, nil
+}
+
+// recordLLMError stores the latest LLM failure, or clears it on success so a
+// stale error never outlives a recovered Ollama.
+func (s *Service) recordLLMError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		s.lastErr, s.lastErrAt = "", time.Time{}
+		return
+	}
+	s.lastErr, s.lastErrAt = err.Error(), time.Now().UTC()
+}
+
+// LastLLMError returns the most recent LLM failure and when it happened.
+// The message is empty when the last call succeeded.
+func (s *Service) LastLLMError() (string, time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastErr, s.lastErrAt
 }
 
 // effectiveLang resolves the category language: request lang (trimmed) →
