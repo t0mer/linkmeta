@@ -1,0 +1,17 @@
+.git
+.github
+.gitignore
+dist/
+bin/
+build/
+docs/
+scans/
+.claude/
+.cursor/
+*.md
+!README.md
+config.yaml
+*.db
+*.sqlite
+.env
+.env.*
