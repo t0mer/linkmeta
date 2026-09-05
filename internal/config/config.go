@@ -28,6 +28,9 @@ type Config struct {
 	MaxTextChars     int
 	UserAgent        string
 	AllowPrivate     bool
+	// ForceLLM makes the model generate description and keywords even when the
+	// page supplies them; its answers then win the merge. Title stays deterministic.
+	ForceLLM bool
 }
 
 // viper keys double as env var names (AutomaticEnv upper-cases the key).
@@ -43,6 +46,7 @@ const (
 	kMaxTextChars = "MAX_TEXT_CHARS"
 	kUserAgent    = "USER_AGENT"
 	kAllowPrivate = "ALLOW_PRIVATE_TARGETS"
+	kForceLLM     = "FORCE_LLM"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -57,6 +61,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kMaxTextChars, 3000)
 	v.SetDefault(kUserAgent, DefaultUserAgent)
 	v.SetDefault(kAllowPrivate, false)
+	v.SetDefault(kForceLLM, false)
 }
 
 // SetDefaults applies default values on v (exported wrapper for main).
@@ -75,6 +80,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.Int("max-text-chars", 3000, "max readable chars sent to model")
 	fs.String("user-agent", DefaultUserAgent, "fetch User-Agent")
 	fs.Bool("allow-private-targets", false, "allow fetching private/loopback/link-local URLs (SSRF guard off)")
+	fs.Bool("force-llm", false, "always let the LLM write description and keywords, overriding the page's own meta tags")
 
 	_ = v.BindPFlag(kPort, fs.Lookup("port"))
 	_ = v.BindPFlag(kOllamaURL, fs.Lookup("ollama-url"))
@@ -87,6 +93,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kMaxTextChars, fs.Lookup("max-text-chars"))
 	_ = v.BindPFlag(kUserAgent, fs.Lookup("user-agent"))
 	_ = v.BindPFlag(kAllowPrivate, fs.Lookup("allow-private-targets"))
+	_ = v.BindPFlag(kForceLLM, fs.Lookup("force-llm"))
 }
 
 // categoryLanguage trims the configured value and defaults blanks to English.
@@ -122,5 +129,6 @@ func Load(v *viper.Viper) (Config, error) {
 		MaxTextChars:     v.GetInt(kMaxTextChars),
 		UserAgent:        v.GetString(kUserAgent),
 		AllowPrivate:     v.GetBool(kAllowPrivate),
+		ForceLLM:         v.GetBool(kForceLLM),
 	}, nil
 }

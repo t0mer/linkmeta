@@ -71,8 +71,10 @@ func (s *Service) Extract(ctx context.Context, rawURL, lang string) (Response, e
 		s.log.Warn("meta parse error", "url", rawURL, "stage", "parse", "err", err)
 	}
 
-	needDesc := meta.Description == ""
-	needKeywords := len(meta.Keywords) == 0
+	// ForceLLM ignores what the page supplied: ask the model for both fields so
+	// its answers win the merge below. Title always stays deterministic.
+	needDesc := meta.Description == "" || s.cfg.ForceLLM
+	needKeywords := len(meta.Keywords) == 0 || s.cfg.ForceLLM
 
 	llmReq := llm.Request{
 		Title:            meta.Title,
