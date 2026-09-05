@@ -29,7 +29,10 @@ The output JSON matches the old n8n Structured Output Parser exactly, so downstr
 
 ```mermaid
 flowchart TD
-    A[POST /extract url] --> B[Fetch page<br/>charset to UTF-8, size cap, SSRF guard]
+    A[POST /extract url] --> K{Cached?<br/>url + lang + config fingerprint}
+    K -->|hit, unless fresh=true| I
+    K -->|miss or fresh=true| B
+    B[Fetch page<br/>charset to UTF-8, size cap, SSRF guard]
     B -->|fetch fails| E[502 error]
     B --> C[Deterministic parse goquery<br/>title / description / keywords]
     C --> D{Gaps?<br/>need description or keywords?}
@@ -38,7 +41,8 @@ flowchart TD
     F --> G2[LLM call: missing fields + category<br/>schema-constrained]
     G --> H[Merge: deterministic always wins]
     G2 --> H
-    H --> I[200 JSON<br/>title, description, category, keywords]
+    H --> S[Store in cache<br/>24h, or 5m if degraded]
+    S --> I[200 JSON<br/>title, description, category, keywords]
     G -.->|LLM down/timeout| J[Degrade: category = Other]
     G2 -.->|LLM down/timeout| J
     J --> I
@@ -54,6 +58,9 @@ flowchart LR
     A -.->|API error, rate limit,<br/>missing key| O
     O -.->|also fails| J[category = Other]
 ```
+
+A repeated URL short-circuits at the first step: no fetch, no model call. See
+[Caching](#caching).
 
 The single LLM call requests **only** the fields the page didn't supply. `category` is always requested and is `enum`-constrained to the configured closed list. Deterministic values are never overwritten by the model.
 
@@ -571,6 +578,9 @@ leaves little headroom; a slower page or a busy box crosses it and degrades to `
 | `last_llm_error` shows `context canceled` | The *client* hung up mid-inference — the caller's timeout is shorter than the request. This is what n8n produces when its node **Timeout** is below `LLM_TIMEOUT`; raise it (240000 ms recommended). Not a model or network fault. |
 | `LLM_PROVIDER=anthropic` but responses are still slow | Claude calls are failing and every request is falling back to the local model. Check `last_llm_error` in `/healthz` — a missing/expired `ANTHROPIC_API_KEY` logs `no API key configured`, and the service warns about it at startup. |
 | Every category is `Other` and requests return in well under a second | No inference is happening — the `/api/chat` call is erroring instantly. Read `last_llm_error` in `/healthz` for the verbatim Ollama message (404 = model missing; 400 on `format` = Ollama older than 0.5.0, which predates structured outputs — upgrade it). |
+| A page's metadata is stale / you fixed something and want a re-run | The result is cached (24 h by default). Add `fresh=true` to re-extract and refresh the entry: `curl '.../extract?url=...&fresh=true'`. |
+| `"cache": "unavailable"` in `/healthz` | `CACHE_BACKEND=redis` but Redis can't be reached. Requests still succeed — every one is simply uncached and re-extracted, so latency returns to the uncached baseline. Check `REDIS_URL` and that the `redis` compose profile is up. |
+| Results never seem to cache (`X-Cache: MISS` every time) | Either `CACHE_ENABLED=false`, or the key is changing between requests — the key includes `lang` and a fingerprint of `FORCE_LLM`, provider, model and category list, so a differing `lang` or a config change is a different entry by design. |
 | `502 {"error":"fetch: ..."}` | The target page couldn't be fetched (timeout, DNS, non-2xx). Some sites block bots — set a different `USER_AGENT`. |
 | `blocked target address ...` on internal URLs | The SSRF guard refused a private/loopback target. Set `ALLOW_PRIVATE_TARGETS=true` if that's intentional. |
 | Garbled / mojibake Hebrew | Legacy sites may serve `windows-1255`. linkmeta normalizes charset to UTF-8 automatically; if a site mislabels its encoding, the raw bytes may still be off at the source. |
