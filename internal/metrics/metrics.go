@@ -35,6 +35,12 @@ var (
 		Buckets: []float64{1, 5, 15, 30, 60, 120, 180, 300},
 	})
 
+	// CacheTotal counts cache outcomes (hit|miss|bypass|error).
+	CacheTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "linkmeta_cache_total",
+		Help: "Cache lookups by result.",
+	}, []string{"result"})
+
 	// FallbackTotal counts requests degraded to category=Other on LLM failure.
 	FallbackTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "linkmeta_fallback_total",
@@ -47,7 +53,7 @@ var once sync.Once
 // MustRegister registers all collectors exactly once (safe for tests + main).
 func MustRegister(r prometheus.Registerer) {
 	once.Do(func() {
-		r.MustRegister(RequestsTotal, RequestDuration, LLMCallsTotal, LLMDuration, FallbackTotal)
+		r.MustRegister(RequestsTotal, RequestDuration, LLMCallsTotal, LLMDuration, FallbackTotal, CacheTotal)
 	})
 }
 
