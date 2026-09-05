@@ -111,7 +111,9 @@ func buildPrompt(req Request) string {
 	fmt.Fprintf(&b, "- category: classify into exactly one of the allowed English categories, "+
 		"then return the category name in %s.\n\n", catLang)
 	b.WriteString("Title: " + req.Title + "\n")
-	if req.Description != "" {
+	// Only as context. When the model is asked to write the description, feeding
+	// it the page's own text invites a verbatim copy of what we are replacing.
+	if req.Description != "" && !req.NeedDescription {
 		b.WriteString("Description: " + req.Description + "\n")
 	}
 	if req.Text != "" {
