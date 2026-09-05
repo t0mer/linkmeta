@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/t0mer/linkmeta/internal/config"
@@ -36,6 +37,7 @@ type healthResponse struct {
 	Ollama         string `json:"ollama"`
 	Model          string `json:"model"`
 	Version        string `json:"version"`
+	Cache          string `json:"cache"`
 	LastLLMError   string `json:"last_llm_error,omitempty"`
 	LastLLMErrorAt string `json:"last_llm_error_at,omitempty"`
 }
@@ -52,10 +54,12 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 func (a *API) handleExtract(w http.ResponseWriter, r *http.Request) {
 	var rawURL, lang string
+	var fresh bool
 	if r.Method == http.MethodPost {
 		var body struct {
-			URL  string `json:"url"`
-			Lang string `json:"lang"`
+			URL   string `json:"url"`
+			Lang  string `json:"lang"`
+			Fresh bool   `json:"fresh"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -63,9 +67,12 @@ func (a *API) handleExtract(w http.ResponseWriter, r *http.Request) {
 		}
 		rawURL = body.URL
 		lang = body.Lang
+		fresh = body.Fresh
 	} else {
 		rawURL = r.URL.Query().Get("url")
 		lang = r.URL.Query().Get("lang")
+		// An unparseable value is not a bypass - only an explicit true bypasses.
+		fresh, _ = strconv.ParseBool(r.URL.Query().Get("fresh"))
 	}
 
 	if rawURL == "" {
@@ -77,10 +84,15 @@ func (a *API) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := a.svc.Extract(r.Context(), rawURL, lang)
+	resp, err := a.svc.Extract(r.Context(), rawURL, lang, fresh)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	// Cache state goes in a header, never the body: the JSON schema is frozen
+	// because n8n's downstream nodes parse it.
+	if resp.CacheStatus != "" {
+		w.Header().Set("X-Cache", resp.CacheStatus)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -102,6 +114,7 @@ func (a *API) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		Ollama:  ollama,
 		Model:   a.cfg.OllamaModel,
 		Version: a.version,
+		Cache:   a.svc.CacheHealth(ctx),
 	}
 	if msg, at := a.svc.LastLLMError(); msg != "" {
 		resp.LastLLMError = msg
