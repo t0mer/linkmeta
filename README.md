@@ -17,7 +17,9 @@ An n8n workflow receives WhatsApp messages (via Green API), extracts a URL, and 
 1. **Deterministic first.** Fetch the actual page and read real metadata from the DOM (`<title>`, `og:*`, `meta[name=description]`, `meta[name=keywords]`). No model needed for anything the page already provides.
 2. **Local LLM fallback only for gaps.** For fields the page *doesn't* provide — and always for category classification — it makes at most **one** call to a local [Ollama](https://ollama.com/) model, fed with the page's actual readable text and constrained by a JSON schema so the output is always parseable.
 
-The result: no cloud AI dependency, correct original-language metadata (including Hebrew), and graceful degradation — if the model is down, you still get real deterministic metadata back.
+The result: no cloud AI dependency by default, correct original-language metadata (including Hebrew), and graceful degradation — if the model is down, you still get real deterministic metadata back.
+
+> An opt-in `LLM_PROVIDER=anthropic` backend trades that premise for speed: seconds instead of ~100 s on CPU-only hardware, at the cost of sending page content to a cloud API. It is **off by default**, and Ollama stays as its fallback. See [Using the Claude API instead of Ollama](#using-the-claude-api-instead-of-ollama).
 
 The output JSON matches the old n8n Structured Output Parser exactly, so downstream nodes keep working unchanged.
 
@@ -40,6 +42,17 @@ flowchart TD
     G -.->|LLM down/timeout| J[Degrade: category = Other]
     G2 -.->|LLM down/timeout| J
     J --> I
+```
+
+The LLM call goes to whichever backend `LLM_PROVIDER` selects:
+
+```mermaid
+flowchart LR
+    L[LLM call] --> P{LLM_PROVIDER}
+    P -->|ollama, default| O[Local Ollama<br/>schema in format]
+    P -->|anthropic| A[Claude API<br/>output_config.format]
+    A -.->|API error, rate limit,<br/>missing key| O
+    O -.->|also fails| J[category = Other]
 ```
 
 The single LLM call requests **only** the fields the page didn't supply. `category` is always requested and is `enum`-constrained to the configured closed list. Deterministic values are never overwritten by the model.
@@ -453,21 +466,33 @@ Example node body (n8n expression):
 
 Two request paths, very different latency on CPU-only hardware:
 
-- **Fast path (category-only).** When the page already provides description *and* keywords, linkmeta sends only the title + description to the model — a short prompt, so classification is quick.
-- **Full-content path.** When description or keywords are missing, it extracts readable article text (truncated to `MAX_TEXT_CHARS`, default 3000 runes) and includes it in the prompt. More tokens → slower on CPU.
+- **Fast path (category-only).** When the page already provides description *and* keywords, linkmeta sends only the title + description to the model, and the model emits only a category — a handful of tokens.
+- **Full-content path.** When description or keywords are missing, it extracts readable article text (truncated to `MAX_TEXT_CHARS`, default 3000 runes) and the model writes a description plus up to 10 keywords — on the order of 150 generated tokens.
 
-Tuning tips for the 2-core arm64 / 12 GB target:
+### Measured on the reference target
 
-- **Keep the model resident:** `OLLAMA_KEEP_ALIVE=24h` (default) avoids reload cost between requests.
-- **`qwen2.5:3b-instruct`** is the default — good Hebrew, ~2–3 GB RAM resident. To go faster, switch to a smaller model:
-  ```bash
-  docker compose exec ollama ollama pull qwen2.5:1.5b-instruct
-  # then set OLLAMA_MODEL=qwen2.5:1.5b-instruct and restart linkmeta
-  ```
-- **Reduce `MAX_TEXT_CHARS`** (e.g. 1500) to cut prompt size on the full-content path. On CPU this is usually the single biggest win — prefill scales with prompt length, and the first ~1500 characters are normally enough to summarise and classify a page.
-- **`LLM_MAX_TOKENS` bounds generation** (default 256, Ollama's `num_predict`). The response schema needs very little output; without a cap, a model that pads the keywords array or repeats itself can run far longer than the answer warrants. Lower it (e.g. 128) if you only need a short description.
+2-core arm64, 12 GB RAM, no GPU, model resident (`OLLAMA_KEEP_ALIVE=24h`), full-content path:
+
+| Model | Cold | Warm |
+|---|---|---|
+| `qwen2.5:3b-instruct` | 136 s | 106 s |
+| `qwen2.5:1.5b-instruct` | — | ~100 s |
+
+**Halving the model bought roughly 13%, not 2×.** That is the important result: on hardware this
+size the run time is dominated by *generation* — measured at roughly 2–3 tokens/sec — so latency
+tracks how many tokens the model must emit, far more than how big the model is or how long the
+prompt is. Budget ~100 s per full-content request and note that the default `LLM_TIMEOUT=180s`
+leaves little headroom; a slower page or a busy box crosses it and degrades to `"Other"`.
+
+### Levers, most effective first
+
+- **Don't make the model write what the page already provides.** Leaving `FORCE_LLM` off is by far the biggest win: a page carrying its own description and keywords needs the model to emit only a category (~5 tokens instead of ~150). `FORCE_LLM=true` removes that path entirely and pins every request to ~100 s.
+- **`LLM_MAX_TOKENS` bounds generation** (default 256, Ollama's `num_predict`). It caps the worst case rather than the typical one — a schema response is ~150 tokens — but without it a model that pads the keywords array can run far past the answer. Lower it (e.g. 128) to force shorter output.
+- **Reduce `MAX_TEXT_CHARS`** (e.g. 1500) to cut prefill on the full-content path. Real but secondary — prefill is not where the time goes on this hardware.
+- **Keep the model resident:** `OLLAMA_KEEP_ALIVE=24h` (default) avoids reload cost; the measurements above show ~30 s of cold-start on the 3b.
+- **A smaller model is a modest win, not a fix.** `qwen2.5:1.5b-instruct` is ~13% faster and weaker at Hebrew; `qwen2.5:0.5b-instruct` is faster still but likely too small to classify reliably.
+- **If ~100 s is unacceptable, change backend, not model.** `LLM_PROVIDER=anthropic` returns in seconds — at the cost of sending page content off your network. See [Using the Claude API instead of Ollama](#using-the-claude-api-instead-of-ollama).
 - Only **one** LLM call is made per request, ever.
-- **`FORCE_LLM=true` pins every request to the full-content path** — there is no fast path while it is on. Budget for that latency, or leave it off and let the page's own metadata short-circuit the slow route.
 
 ---
 
@@ -477,11 +502,13 @@ Tuning tips for the 2-core arm64 / 12 GB target:
 |---|---|
 | `"ollama": "unreachable"` in `/healthz`; every category is `Other` | Ollama isn't running or `OLLAMA_URL` is wrong. The service still returns real deterministic metadata — it degrades, it does not fail. Start Ollama / fix the URL, and `ollama pull` the model. |
 | `"ollama": "model-missing"` in `/healthz`; every category is `Other` | The server is up but the model was never pulled — `ollama list` passes with zero models, so nothing else catches this. Run `docker compose exec ollama ollama pull qwen2.5:3b-instruct`. |
+| `last_llm_error` shows `context canceled` | The *client* hung up mid-inference — the caller's timeout is shorter than the request. This is what n8n produces when its node **Timeout** is below `LLM_TIMEOUT`; raise it (240000 ms recommended). Not a model or network fault. |
+| `LLM_PROVIDER=anthropic` but responses are still slow | Claude calls are failing and every request is falling back to the local model. Check `last_llm_error` in `/healthz` — a missing/expired `ANTHROPIC_API_KEY` logs `no API key configured`, and the service warns about it at startup. |
 | Every category is `Other` and requests return in well under a second | No inference is happening — the `/api/chat` call is erroring instantly. Read `last_llm_error` in `/healthz` for the verbatim Ollama message (404 = model missing; 400 on `format` = Ollama older than 0.5.0, which predates structured outputs — upgrade it). |
 | `502 {"error":"fetch: ..."}` | The target page couldn't be fetched (timeout, DNS, non-2xx). Some sites block bots — set a different `USER_AGENT`. |
 | `blocked target address ...` on internal URLs | The SSRF guard refused a private/loopback target. Set `ALLOW_PRIVATE_TARGETS=true` if that's intentional. |
 | Garbled / mojibake Hebrew | Legacy sites may serve `windows-1255`. linkmeta normalizes charset to UTF-8 automatically; if a site mislabels its encoding, the raw bytes may still be off at the source. |
-| Requests time out in n8n | The model is slow on CPU. Raise the n8n node **Timeout** above `LLM_TIMEOUT`, and/or lower `MAX_TEXT_CHARS` or switch to a smaller model. |
+| Requests time out in n8n | The model is slow on CPU (~100 s measured for a full-content request). Raise the n8n node **Timeout** above `LLM_TIMEOUT` (240000 ms recommended). To actually reduce the time, cut generated tokens — leave `FORCE_LLM` off — or switch backend; a smaller model buys only ~13% (see [Performance notes](#performance-notes)). |
 | First request after startup is slow | Model load. `OLLAMA_KEEP_ALIVE=24h` keeps it resident afterward. |
 
 ---
