@@ -123,3 +123,26 @@ func TestVersionReachability(t *testing.T) {
 		t.Fatalf("Version = %v", err)
 	}
 }
+
+func TestPromptOmitsPageDescriptionWhenGenerating(t *testing.T) {
+	p := buildPrompt(Request{
+		Title:           "T",
+		Description:     "stale page description",
+		NeedDescription: true,
+		Categories:      []string{"News"},
+	})
+	if strings.Contains(p, "stale page description") {
+		t.Error("page description fed back to the model it is meant to replace")
+	}
+}
+
+func TestPromptKeepsPageDescriptionAsContextWhenNotGenerating(t *testing.T) {
+	p := buildPrompt(Request{
+		Title:       "T",
+		Description: "page description",
+		Categories:  []string{"News"},
+	})
+	if !strings.Contains(p, "page description") {
+		t.Error("page description should stay as context when not regenerating it")
+	}
+}

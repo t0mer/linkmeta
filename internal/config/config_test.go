@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -68,5 +69,41 @@ func TestCategoriesCSVParsed(t *testing.T) {
 	c, _ := Load(v)
 	if len(c.Categories) != 3 || c.Categories[1] != "B" {
 		t.Errorf("categories = %v, want [A B C]", c.Categories)
+	}
+}
+
+func TestForceLLMDefaultsFalse(t *testing.T) {
+	v := viper.New()
+	setDefaults(v)
+	c, _ := Load(v)
+	if c.ForceLLM {
+		t.Error("ForceLLM = true, want false by default")
+	}
+}
+
+func TestForceLLMEnvOverride(t *testing.T) {
+	t.Setenv("FORCE_LLM", "true")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	c, _ := Load(v)
+	if !c.ForceLLM {
+		t.Error("ForceLLM = false, want true from FORCE_LLM=true")
+	}
+}
+
+func TestForceLLMFlagOverridesEnv(t *testing.T) {
+	t.Setenv("FORCE_LLM", "false")
+	v := viper.New()
+	setDefaults(v)
+	v.AutomaticEnv()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	BindFlags(v, fs)
+	if err := fs.Parse([]string{"--force-llm"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := Load(v)
+	if !c.ForceLLM {
+		t.Error("ForceLLM = false, want true from --force-llm")
 	}
 }

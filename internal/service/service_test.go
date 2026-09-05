@@ -177,3 +177,81 @@ func TestValidateURL(t *testing.T) {
 		t.Error("garbage should be invalid")
 	}
 }
+
+func TestExtractForceLLMOverridesPageMeta(t *testing.T) {
+	html := []byte(`<html><head><title>Real</title>
+	<meta name="description" content="Page Desc">
+	<meta name="keywords" content="go,rust"></head><body>body text</body></html>`)
+	cfg := testCfg()
+	cfg.ForceLLM = true
+	f := fakeFetcher{html: html, url: "http://x.com"}
+	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Keywords: []string{"LLM-KW"}, Category: "Technology"}}
+	s := New(cfg, f, l, slog.Default())
+	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Description != "LLM Desc" {
+		t.Errorf("description = %q, want LLM Desc", resp.Description)
+	}
+	if len(resp.Keywords) != 1 || resp.Keywords[0] != "llm-kw" {
+		t.Errorf("keywords = %v, want [llm-kw]", resp.Keywords)
+	}
+	if resp.Category != "Technology" {
+		t.Errorf("category = %q, want Technology", resp.Category)
+	}
+	if resp.Title != "Real" {
+		t.Errorf("title = %q, want Real (title stays deterministic)", resp.Title)
+	}
+}
+
+func TestExtractForceLLMRequestsAllFieldsAndSendsText(t *testing.T) {
+	html := []byte(`<html><head><title>Real</title>
+	<meta name="description" content="Page Desc">
+	<meta name="keywords" content="go"></head><body><p>readable body text</p></body></html>`)
+	cfg := testCfg()
+	cfg.ForceLLM = true
+	cap := &captureLLM{}
+	s := New(cfg, fakeFetcher{html: html, url: "http://x.com"}, cap, slog.Default())
+	if _, err := s.Extract(context.Background(), "http://x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !cap.last.NeedDescription || !cap.last.NeedKeywords {
+		t.Errorf("need flags = %v/%v, want true/true when forced", cap.last.NeedDescription, cap.last.NeedKeywords)
+	}
+	if cap.last.Text == "" {
+		t.Error("page text not sent to the model when forced")
+	}
+}
+
+func TestExtractForceLLMFailureKeepsPageValues(t *testing.T) {
+	html := []byte(`<html><head><title>Real</title>
+	<meta name="description" content="Page Desc"></head></html>`)
+	cfg := testCfg()
+	cfg.ForceLLM = true
+	f := fakeFetcher{html: html, url: "http://x.com"}
+	l := fakeLLM{err: errors.New("ollama down")}
+	s := New(cfg, f, l, slog.Default())
+	resp, err := s.Extract(context.Background(), "http://x.com", "")
+	if err != nil {
+		t.Fatalf("LLM failure must not error even when forced: %v", err)
+	}
+	if resp.Description != "Page Desc" {
+		t.Errorf("description = %q, want the page value on LLM failure", resp.Description)
+	}
+	if resp.Category != "Other" {
+		t.Errorf("category = %q, want Other", resp.Category)
+	}
+}
+
+func TestExtractUnforcedStillPrefersPageMeta(t *testing.T) {
+	html := []byte(`<html><head><title>Real</title>
+	<meta name="description" content="Page Desc"></head></html>`)
+	f := fakeFetcher{html: html, url: "http://x.com"}
+	l := fakeLLM{res: llm.Result{Description: "LLM Desc", Category: "News"}}
+	s := New(testCfg(), f, l, slog.Default())
+	resp, _ := s.Extract(context.Background(), "http://x.com", "")
+	if resp.Description != "Page Desc" {
+		t.Errorf("description = %q, want Page Desc when not forced", resp.Description)
+	}
+}
