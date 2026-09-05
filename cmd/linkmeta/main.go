@@ -64,6 +64,7 @@ func run(v *viper.Viper) error {
 
 	f := fetch.New(cfg.FetchTimeout, cfg.UserAgent, 3<<20, cfg.AllowPrivate)
 	ollama := llm.NewOllama(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaKeepAlive, cfg.LLMTimeout)
+	ollama.SetMaxTokens(cfg.LLMMaxTokens)
 	svc := service.New(cfg, f, ollama, log)
 	api := httpapi.NewAPI(svc, ollama, cfg, version, log)
 

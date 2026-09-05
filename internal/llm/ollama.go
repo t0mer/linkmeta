@@ -47,8 +47,14 @@ type Ollama struct {
 	baseURL   string
 	model     string
 	keepAlive string
+	maxTokens int
 	client    *http.Client
 }
+
+// SetMaxTokens caps generation length (num_predict). Our schema needs very few
+// tokens, and on CPU-only hardware an unbounded response is the difference
+// between a few seconds and a stall. Values <= 0 leave generation uncapped.
+func (o *Ollama) SetMaxTokens(n int) { o.maxTokens = n }
 
 // NewOllama builds an Ollama client.
 func NewOllama(baseURL, model, keepAlive string, timeout time.Duration) *Ollama {
@@ -153,7 +159,7 @@ func (o *Ollama) Complete(ctx context.Context, req Request) (Result, error) {
 		Stream:    false,
 		Format:    buildSchema(req),
 		KeepAlive: o.keepAlive,
-		Options:   map[string]any{"temperature": 0.2, "num_ctx": 4096},
+		Options:   o.options(),
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -193,6 +199,15 @@ func (o *Ollama) Complete(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("decode structured content: %w", err)
 	}
 	return Result{Description: out.Description, Keywords: out.Keywords, Category: out.Category}, nil
+}
+
+// options builds the per-call Ollama options, capping generation when configured.
+func (o *Ollama) options() map[string]any {
+	opts := map[string]any{"temperature": 0.2, "num_ctx": 4096}
+	if o.maxTokens > 0 {
+		opts["num_predict"] = o.maxTokens
+	}
+	return opts
 }
 
 // Version checks Ollama reachability via GET /api/version.
