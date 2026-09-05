@@ -182,3 +182,42 @@ func TestCheckModelMissingReturnsError(t *testing.T) {
 		t.Errorf("err = %v, want the server message", err)
 	}
 }
+
+func TestCompleteSendsNumPredictCap(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"message":{"role":"assistant","content":"{\"category\":\"News\"}"}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m", "24h", 5*time.Second)
+	o.SetMaxTokens(128)
+	if _, err := o.Complete(context.Background(), Request{Title: "t", Categories: []string{"News"}}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := got["options"].(map[string]any)
+	if opts == nil {
+		t.Fatal("no options sent")
+	}
+	if n, _ := opts["num_predict"].(float64); int(n) != 128 {
+		t.Errorf("num_predict = %v, want 128 (generation must be bounded)", opts["num_predict"])
+	}
+}
+
+func TestNonPositiveMaxTokensLeavesGenerationUncapped(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"message":{"role":"assistant","content":"{\"category\":\"News\"}"}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m", "24h", 5*time.Second)
+	o.SetMaxTokens(0)
+	if _, err := o.Complete(context.Background(), Request{Title: "t", Categories: []string{"News"}}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := got["options"].(map[string]any)
+	if _, ok := opts["num_predict"]; ok {
+		t.Error("num_predict sent for a non-positive cap; want the option omitted")
+	}
+}

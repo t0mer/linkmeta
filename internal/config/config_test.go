@@ -107,3 +107,21 @@ func TestForceLLMFlagOverridesEnv(t *testing.T) {
 		t.Error("ForceLLM = false, want true from --force-llm")
 	}
 }
+
+func TestLLMMaxTokensDefaultAndOverride(t *testing.T) {
+	v := viper.New()
+	setDefaults(v)
+	c, _ := Load(v)
+	if c.LLMMaxTokens != 256 {
+		t.Errorf("LLMMaxTokens = %d, want 256", c.LLMMaxTokens)
+	}
+
+	t.Setenv("LLM_MAX_TOKENS", "96")
+	v2 := viper.New()
+	setDefaults(v2)
+	v2.AutomaticEnv()
+	c2, _ := Load(v2)
+	if c2.LLMMaxTokens != 96 {
+		t.Errorf("LLMMaxTokens = %d, want 96 from env", c2.LLMMaxTokens)
+	}
+}
