@@ -221,3 +221,32 @@ func TestNonPositiveMaxTokensLeavesGenerationUncapped(t *testing.T) {
 		t.Error("num_predict sent for a non-positive cap; want the option omitted")
 	}
 }
+
+// The Anthropic structured-output API rejects an object schema that does not
+// explicitly disallow extra properties ("For 'object' type, 'additionalProperties'
+// must be explicitly set to false"). Ollama tolerates its absence, so only the
+// cloud backend fails - keep it on the shared schema.
+func TestSchemaDisallowsAdditionalProperties(t *testing.T) {
+	for _, req := range []Request{
+		{Categories: []string{"News"}},
+		{Categories: []string{"News"}, NeedDescription: true, NeedKeywords: true},
+	} {
+		schema := buildSchema(req)
+		got, ok := schema["additionalProperties"]
+		if !ok {
+			t.Fatalf("schema has no additionalProperties key: %v", schema)
+		}
+		if got != false {
+			t.Errorf("additionalProperties = %v, want false", got)
+		}
+	}
+}
+
+func TestSchemaRequiresEveryDeclaredProperty(t *testing.T) {
+	schema := buildSchema(Request{Categories: []string{"News"}, NeedDescription: true, NeedKeywords: true})
+	props, _ := schema["properties"].(map[string]any)
+	required, _ := schema["required"].([]string)
+	if len(props) != len(required) {
+		t.Errorf("properties=%d required=%d; structured outputs need every property required", len(props), len(required))
+	}
+}

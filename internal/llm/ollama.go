@@ -101,6 +101,10 @@ func buildSchema(req Request) map[string]any {
 		"type":       "object",
 		"properties": props,
 		"required":   required,
+		// Required by the Anthropic structured-output API: an object schema must
+		// explicitly disallow extra properties or the request is rejected with a
+		// 400. Ollama accepts it too, so both backends share one schema.
+		"additionalProperties": false,
 	}
 }
 
