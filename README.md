@@ -147,17 +147,42 @@ curl -s 'http://localhost:8080/extract?url=https://this-host-does-not-exist.inva
 
 ### `GET /healthz`
 
-Liveness + Ollama reachability.
+Liveness, deployed version, and a real check that extraction can actually use the LLM.
 
 ```bash
 curl http://localhost:8080/healthz
 ```
 
 ```json
-{"status": "ok", "ollama": "ok", "model": "qwen2.5:3b-instruct"}
+{"status": "ok", "ollama": "ok", "model": "qwen2.5:3b-instruct", "version": "2026.9.0"}
 ```
 
-`ollama` is `"ok"` or `"unreachable"` (checked with a short-timeout `GET /api/version`). The service is still healthy and serves `/extract` even when Ollama is unreachable.
+`status` is `"ok"` whenever the service is up — it serves `/extract` regardless of Ollama,
+degrading rather than failing. `ollama` is the useful field:
+
+| `ollama` | Meaning |
+|---|---|
+| `"ok"` | Server answered `GET /api/version` **and** the configured model is installed (`POST /api/show`, metadata only — the model is not loaded). |
+| `"unreachable"` | The server did not answer. Wrong `OLLAMA_URL`, or Ollama is down. |
+| `"model-missing"` | The server is up but the model is not pulled. **Every extraction will degrade to `category: "Other"`** until you `ollama pull` it. |
+
+The model check matters: Ollama answers `/api/version` happily with zero models pulled, and
+the sidecar's `ollama list` healthcheck passes too — so a server-only probe reports `"ok"`
+while 100% of requests are silently degrading.
+
+When the most recent LLM call failed, the body also carries the error verbatim, so you can
+diagnose without reading container logs (both fields are omitted once a call succeeds):
+
+```json
+{
+  "status": "ok",
+  "ollama": "model-missing",
+  "model": "qwen2.5:3b-instruct",
+  "version": "2026.9.0",
+  "last_llm_error": "ollama status 404: model \"qwen2.5:3b-instruct\" not found",
+  "last_llm_error_at": "2026-09-05T09:12:44Z"
+}
+```
 
 ### `GET /metrics`
 
@@ -411,7 +436,8 @@ Tuning tips for the 2-core arm64 / 12 GB target:
 | Symptom | Cause / fix |
 |---|---|
 | `"ollama": "unreachable"` in `/healthz`; every category is `Other` | Ollama isn't running or `OLLAMA_URL` is wrong. The service still returns real deterministic metadata — it degrades, it does not fail. Start Ollama / fix the URL, and `ollama pull` the model. |
-| `"ollama": "ok"` in `/healthz`, but every category is still `Other` | Ollama is running but the configured model was never pulled — `/healthz` probes the server (`/api/version`), not the model, and the sidecar's `ollama list` healthcheck passes with zero models. Check `docker compose exec ollama ollama list` and `docker compose logs linkmeta \| grep "llm failed"` for the real error, then `ollama pull qwen2.5:3b-instruct`. |
+| `"ollama": "model-missing"` in `/healthz`; every category is `Other` | The server is up but the model was never pulled — `ollama list` passes with zero models, so nothing else catches this. Run `docker compose exec ollama ollama pull qwen2.5:3b-instruct`. |
+| Every category is `Other` and requests return in well under a second | No inference is happening — the `/api/chat` call is erroring instantly. Read `last_llm_error` in `/healthz` for the verbatim Ollama message (404 = model missing; 400 on `format` = Ollama older than 0.5.0, which predates structured outputs — upgrade it). |
 | `502 {"error":"fetch: ..."}` | The target page couldn't be fetched (timeout, DNS, non-2xx). Some sites block bots — set a different `USER_AGENT`. |
 | `blocked target address ...` on internal URLs | The SSRF guard refused a private/loopback target. Set `ALLOW_PRIVATE_TARGETS=true` if that's intentional. |
 | Garbled / mojibake Hebrew | Legacy sites may serve `windows-1255`. linkmeta normalizes charset to UTF-8 automatically; if a site mislabels its encoding, the raw bytes may still be off at the source. |
