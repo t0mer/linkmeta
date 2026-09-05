@@ -33,5 +33,22 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # Optional Redis cache backend. Not started by default; bring it up with:
+  #   docker compose --profile redis up -d
+  # and set CACHE_BACKEND=redis + REDIS_URL=redis://redis:6379 on linkmeta.
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   ollama-models:
+  redis-data:

@@ -96,6 +96,10 @@ By default the `category` is returned in **English** (strict — `enum`-constrai
 - **Globally** via `CATEGORY_LANGUAGE` (see [Configuration](#configuration)).
 - **Per request** via the optional `lang` parameter, which overrides the global default for that call.
 
+`fresh=true` (query param, or `"fresh": true` in the POST body) bypasses the cache and
+re-extracts; see [Caching](#caching). The response carries an `X-Cache: HIT|MISS|BYPASS`
+header — the JSON body is unchanged either way.
+
 The page is always *classified* against the canonical English list; `lang` only changes the language of the returned label. English keeps the strict enum guarantee; any other language (e.g. `Hebrew`, `Spanish`) returns a **best-effort translated** label. `lang` only affects `category` — `description` and `keywords` stay in the page's original language. On LLM failure the category still falls back to `"Other"`.
 
 ```bash
@@ -167,7 +171,7 @@ curl http://localhost:8080/healthz
 ```
 
 ```json
-{"status": "ok", "ollama": "ok", "model": "qwen2.5:3b-instruct", "version": "2026.9.0"}
+{"status": "ok", "ollama": "ok", "model": "qwen2.5:3b-instruct", "version": "2026.9.0", "cache": "ok"}
 ```
 
 `status` is `"ok"` whenever the service is up — it serves `/extract` regardless of Ollama,
@@ -178,6 +182,9 @@ degrading rather than failing. `ollama` is the useful field:
 | `"ok"` | Server answered `GET /api/version` **and** the configured model is installed (`POST /api/show`, metadata only — the model is not loaded). |
 | `"unreachable"` | The server did not answer. Wrong `OLLAMA_URL`, or Ollama is down. |
 | `"model-missing"` | The server is up but the model is not pulled. **Every extraction will degrade to `category: "Other"`** until you `ollama pull` it. |
+
+`cache` is `"ok"`, `"disabled"` (no backend configured), or `"unavailable"` (a configured
+Redis is unreachable — requests still succeed, uncached).
 
 The model check matters: Ollama answers `/api/version` happily with zero models pulled, and
 the sidecar's `ollama list` healthcheck passes too — so a server-only probe reports `"ok"`
@@ -208,6 +215,7 @@ Prometheus exposition. Exposed series include:
 | `linkmeta_llm_calls_total` | counter | `outcome` (`ok`/`error`) |
 | `linkmeta_llm_duration_seconds` | histogram | — |
 | `linkmeta_fallback_total` | counter | — |
+| `linkmeta_cache_total` | counter | `result` (`hit`/`miss`/`bypass`/`error`) |
 
 ---
 
@@ -331,6 +339,12 @@ Precedence: **flags > environment variables > `config.yaml`** (all optional; sen
 | `LLM_MAX_TOKENS` | `--llm-max-tokens` | `256` | Cap on generated tokens (Ollama `num_predict`). `0` = uncapped |
 | `USER_AGENT` | `--user-agent` | realistic Chrome UA | Override for bot-blocking sites |
 | `ALLOW_PRIVATE_TARGETS` | `--allow-private-targets` | `false` | Allow fetching private/loopback URLs (SSRF guard off) |
+| `CACHE_ENABLED` | `--cache-enabled` | `true` | Cache `/extract` results |
+| `CACHE_BACKEND` | `--cache-backend` | `memory` | `memory` (in-process) or `redis` |
+| `CACHE_TTL` | `--cache-ttl` | `24h` | TTL for successful results |
+| `CACHE_DEGRADED_TTL` | `--cache-degraded-ttl` | `5m` | TTL when the LLM failed (`category: "Other"`) |
+| `CACHE_MAX_ENTRIES` | `--cache-max-entries` | `1000` | Entry cap, `memory` backend only |
+| `REDIS_URL` | `--redis-url` | `redis://localhost:6379` | Used when `CACHE_BACKEND=redis` |
 | `FORCE_LLM` | `--force-llm` | `false` | Always let the model write `description` and `keywords`, overriding the page's own meta tags |
 | `LLM_PROVIDER` | `--llm-provider` | `ollama` | Backend: `ollama` (self-hosted) or `anthropic` (Claude API, Ollama kept as fallback) |
 | `ANTHROPIC_API_KEY` | *(env only)* | — | Claude API key. Env var only — never put it in `config.yaml` |
@@ -365,6 +379,57 @@ force_llm: false
 ```bash
 ./linkmeta --port 8080 --ollama-model qwen2.5:3b-instruct --llm-timeout 240s --max-text-chars 2000
 ```
+
+### Caching
+
+Repeated URLs are served from cache, costing neither a page fetch nor an LLM call — the
+difference between ~100 s and ~0 s on CPU-only hardware. On by default.
+
+```bash
+curl 'http://localhost:8080/extract?url=https://go.dev/blog/' -i | grep X-Cache
+# X-Cache: MISS      first request
+# X-Cache: HIT       thereafter
+```
+
+**Bypassing the cache.** Add `fresh=true` to force a re-extraction. It skips the *read*
+but still writes the result, so it refreshes the entry rather than disabling caching:
+
+```bash
+curl 'http://localhost:8080/extract?url=https://go.dev/blog/&fresh=true'      # GET
+curl -X POST http://localhost:8080/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://go.dev/blog/","fresh":true}'                            # POST
+```
+
+Only an explicit true value (`true`, `1`, `yes`) bypasses; anything unparseable is
+treated as `false`, so a typo can't silently disable caching.
+
+**What's in the key.** The URL, the effective `lang`, and a fingerprint of the settings
+that shape a result (`FORCE_LLM`, provider, model, category list, default category
+language). A Hebrew request therefore never receives an English-labelled cache entry, and
+changing any of those settings invalidates prior entries — which matters because Redis
+outlives the process.
+
+**Degraded results expire fast.** When the LLM fails, `/extract` still returns 200 with
+`category: "Other"`. That is cached under `CACHE_DEGRADED_TTL` (5 m) instead of
+`CACHE_TTL` (24 h), so a broken model can't freeze a bad answer in place for a day, while
+a retry storm still can't hammer a struggling model.
+
+**Backends.** `memory` (default) is an in-process TTL map bounded by `CACHE_MAX_ENTRIES`;
+it needs no extra infrastructure and is lost on restart. `redis` survives restarts and is
+shared across instances:
+
+```bash
+docker compose --profile redis up -d
+# then set on linkmeta:
+CACHE_BACKEND=redis
+REDIS_URL=redis://redis:6379
+```
+
+A cache failure never fails a request — errors are logged, counted in
+`linkmeta_cache_total{result="error"}`, and treated as a miss. `/healthz` reports the
+backend as `ok`, `disabled`, or `unavailable`, so a dead Redis is visible rather than
+silently bypassed.
 
 ### Using the Claude API instead of Ollama
 
@@ -492,6 +557,7 @@ leaves little headroom; a slower page or a busy box crosses it and degrades to `
 - **Keep the model resident:** `OLLAMA_KEEP_ALIVE=24h` (default) avoids reload cost; the measurements above show ~30 s of cold-start on the 3b.
 - **A smaller model is a modest win, not a fix.** `qwen2.5:1.5b-instruct` is ~13% faster and weaker at Hebrew; `qwen2.5:0.5b-instruct` is faster still but likely too small to classify reliably.
 - **If ~100 s is unacceptable, change backend, not model.** `LLM_PROVIDER=anthropic` returns in seconds — at the cost of sending page content off your network. See [Using the Claude API instead of Ollama](#using-the-claude-api-instead-of-ollama).
+- **A cached URL costs nothing** — no fetch, no model call. With `CACHE_ENABLED=true` (default) a repeated bookmark returns immediately; see [Caching](#caching).
 - Only **one** LLM call is made per request, ever.
 
 ---
