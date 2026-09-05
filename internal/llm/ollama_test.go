@@ -146,3 +146,78 @@ func TestPromptKeepsPageDescriptionAsContextWhenNotGenerating(t *testing.T) {
 		t.Error("page description should stay as context when not regenerating it")
 	}
 }
+
+func TestCheckModelPresent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/show" {
+			t.Errorf("path = %s, want /api/show", r.URL.Path)
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] != "m1" {
+			t.Errorf("model = %v, want m1", body["model"])
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"details":{}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m1", "24h", 5*time.Second)
+	if err := o.CheckModel(context.Background()); err != nil {
+		t.Errorf("CheckModel = %v, want nil", err)
+	}
+}
+
+func TestCheckModelMissingReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":"model 'm1' not found"}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m1", "24h", 5*time.Second)
+	err := o.CheckModel(context.Background())
+	if err == nil {
+		t.Fatal("CheckModel = nil, want error for a missing model")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v, want the server message", err)
+	}
+}
+
+func TestCompleteSendsNumPredictCap(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"message":{"role":"assistant","content":"{\"category\":\"News\"}"}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m", "24h", 5*time.Second)
+	o.SetMaxTokens(128)
+	if _, err := o.Complete(context.Background(), Request{Title: "t", Categories: []string{"News"}}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := got["options"].(map[string]any)
+	if opts == nil {
+		t.Fatal("no options sent")
+	}
+	if n, _ := opts["num_predict"].(float64); int(n) != 128 {
+		t.Errorf("num_predict = %v, want 128 (generation must be bounded)", opts["num_predict"])
+	}
+}
+
+func TestNonPositiveMaxTokensLeavesGenerationUncapped(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"message":{"role":"assistant","content":"{\"category\":\"News\"}"}}`))
+	}))
+	defer srv.Close()
+	o := NewOllama(srv.URL, "m", "24h", 5*time.Second)
+	o.SetMaxTokens(0)
+	if _, err := o.Complete(context.Background(), Request{Title: "t", Categories: []string{"News"}}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := got["options"].(map[string]any)
+	if _, ok := opts["num_predict"]; ok {
+		t.Error("num_predict sent for a non-positive cap; want the option omitted")
+	}
+}

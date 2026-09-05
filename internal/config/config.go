@@ -26,8 +26,10 @@ type Config struct {
 	FetchTimeout     time.Duration
 	LLMTimeout       time.Duration
 	MaxTextChars     int
-	UserAgent        string
-	AllowPrivate     bool
+	// LLMMaxTokens caps generation length (Ollama num_predict). 0 = uncapped.
+	LLMMaxTokens int
+	UserAgent    string
+	AllowPrivate bool
 	// ForceLLM makes the model generate description and keywords even when the
 	// page supplies them; its answers then win the merge. Title stays deterministic.
 	ForceLLM bool
@@ -44,6 +46,7 @@ const (
 	kFetchTimeout = "FETCH_TIMEOUT"
 	kLLMTimeout   = "LLM_TIMEOUT"
 	kMaxTextChars = "MAX_TEXT_CHARS"
+	kLLMMaxTokens = "LLM_MAX_TOKENS"
 	kUserAgent    = "USER_AGENT"
 	kAllowPrivate = "ALLOW_PRIVATE_TARGETS"
 	kForceLLM     = "FORCE_LLM"
@@ -59,6 +62,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(kFetchTimeout, "20s")
 	v.SetDefault(kLLMTimeout, "180s")
 	v.SetDefault(kMaxTextChars, 3000)
+	v.SetDefault(kLLMMaxTokens, 256)
 	v.SetDefault(kUserAgent, DefaultUserAgent)
 	v.SetDefault(kAllowPrivate, false)
 	v.SetDefault(kForceLLM, false)
@@ -78,6 +82,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	fs.Duration("fetch-timeout", 20*time.Second, "page fetch timeout")
 	fs.Duration("llm-timeout", 180*time.Second, "LLM call timeout")
 	fs.Int("max-text-chars", 3000, "max readable chars sent to model")
+	fs.Int("llm-max-tokens", 256, "cap on generated tokens (Ollama num_predict); 0 = uncapped")
 	fs.String("user-agent", DefaultUserAgent, "fetch User-Agent")
 	fs.Bool("allow-private-targets", false, "allow fetching private/loopback/link-local URLs (SSRF guard off)")
 	fs.Bool("force-llm", false, "always let the LLM write description and keywords, overriding the page's own meta tags")
@@ -91,6 +96,7 @@ func BindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 	_ = v.BindPFlag(kFetchTimeout, fs.Lookup("fetch-timeout"))
 	_ = v.BindPFlag(kLLMTimeout, fs.Lookup("llm-timeout"))
 	_ = v.BindPFlag(kMaxTextChars, fs.Lookup("max-text-chars"))
+	_ = v.BindPFlag(kLLMMaxTokens, fs.Lookup("llm-max-tokens"))
 	_ = v.BindPFlag(kUserAgent, fs.Lookup("user-agent"))
 	_ = v.BindPFlag(kAllowPrivate, fs.Lookup("allow-private-targets"))
 	_ = v.BindPFlag(kForceLLM, fs.Lookup("force-llm"))
@@ -127,6 +133,7 @@ func Load(v *viper.Viper) (Config, error) {
 		FetchTimeout:     v.GetDuration(kFetchTimeout),
 		LLMTimeout:       v.GetDuration(kLLMTimeout),
 		MaxTextChars:     v.GetInt(kMaxTextChars),
+		LLMMaxTokens:     v.GetInt(kLLMMaxTokens),
 		UserAgent:        v.GetString(kUserAgent),
 		AllowPrivate:     v.GetBool(kAllowPrivate),
 		ForceLLM:         v.GetBool(kForceLLM),

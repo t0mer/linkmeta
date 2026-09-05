@@ -36,6 +36,10 @@ type Result struct {
 type Client interface {
 	Complete(ctx context.Context, req Request) (Result, error)
 	Version(ctx context.Context) error
+	// CheckModel reports whether the configured model is actually installed.
+	// Version() only proves the server is up: Ollama answers /api/version
+	// happily with zero models pulled, while every /api/chat then 404s.
+	CheckModel(ctx context.Context) error
 }
 
 // Ollama talks to an Ollama server over HTTP.
@@ -43,8 +47,14 @@ type Ollama struct {
 	baseURL   string
 	model     string
 	keepAlive string
+	maxTokens int
 	client    *http.Client
 }
+
+// SetMaxTokens caps generation length (num_predict). Our schema needs very few
+// tokens, and on CPU-only hardware an unbounded response is the difference
+// between a few seconds and a stall. Values <= 0 leave generation uncapped.
+func (o *Ollama) SetMaxTokens(n int) { o.maxTokens = n }
 
 // NewOllama builds an Ollama client.
 func NewOllama(baseURL, model, keepAlive string, timeout time.Duration) *Ollama {
@@ -149,7 +159,7 @@ func (o *Ollama) Complete(ctx context.Context, req Request) (Result, error) {
 		Stream:    false,
 		Format:    buildSchema(req),
 		KeepAlive: o.keepAlive,
-		Options:   map[string]any{"temperature": 0.2, "num_ctx": 4096},
+		Options:   o.options(),
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -191,6 +201,15 @@ func (o *Ollama) Complete(ctx context.Context, req Request) (Result, error) {
 	return Result{Description: out.Description, Keywords: out.Keywords, Category: out.Category}, nil
 }
 
+// options builds the per-call Ollama options, capping generation when configured.
+func (o *Ollama) options() map[string]any {
+	opts := map[string]any{"temperature": 0.2, "num_ctx": 4096}
+	if o.maxTokens > 0 {
+		opts["num_predict"] = o.maxTokens
+	}
+	return opts
+}
+
 // Version checks Ollama reachability via GET /api/version.
 func (o *Ollama) Version(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.baseURL+"/api/version", nil)
@@ -204,6 +223,32 @@ func (o *Ollama) Version(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("ollama version status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// CheckModel verifies the configured model exists on the server via POST
+// /api/show. It only reads metadata — the model is not loaded into memory.
+func (o *Ollama) CheckModel(ctx context.Context) error {
+	buf, err := json.Marshal(map[string]string{"model": o.model})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		o.baseURL+"/api/show", bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ollama show: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("model %q unavailable (status %d): %s",
+			o.model, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
