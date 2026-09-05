@@ -202,6 +202,19 @@ docker run -d --name linkmeta -p 8080:8080 \
   techblog/linkmeta:latest
 ```
 
+### Pre-built binaries
+
+Every [release](https://github.com/t0mer/linkmeta/releases) attaches static binaries for
+Linux (amd64, arm64, armv7, armv6, 386), macOS (Intel, Apple Silicon) and Windows, plus a
+`checksums.txt`:
+
+```bash
+VERSION=2026.9.0
+curl -LO https://github.com/t0mer/linkmeta/releases/download/$VERSION/linkmeta_${VERSION}_linux-arm64
+chmod +x linkmeta_${VERSION}_linux-arm64
+./linkmeta_${VERSION}_linux-arm64 --version
+```
+
 ### From source (development)
 
 ```bash
@@ -215,6 +228,50 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o linkmeta-arm64 ./cmd/linkmeta
 ```
 
 Requires Go 1.25+. Run `go test ./...` for the test suite.
+
+---
+
+## Releases & CI
+
+Versions follow **`YYYY.M.PATCH`** (no leading zero on the month, e.g. `2026.9.0`). The git
+tag is the single source of truth — `scripts/next-version.sh` takes today's `YYYY.M`, finds
+the latest matching tag and increments the patch, starting each new month at `.0`.
+
+Two workflows, both **manual** (`workflow_dispatch`) — releases are intentional, never
+triggered by a push:
+
+| Workflow | Does | Trigger |
+|---|---|---|
+| `.github/workflows/release.yml` | `go vet` + `go test`, cross-compiles every target into `dist/`, tags, publishes a GitHub Release with the binaries and `checksums.txt` | Manual, optional `version` input (blank = auto-compute) |
+| `.github/workflows/docker.yml` | Builds and pushes the multi-arch image to Docker Hub as `techblog/linkmeta:latest` and `:<version>` | Manual, **or** automatically when a Release run completes successfully |
+
+Release build matrix (all `CGO_ENABLED=0`, `-trimpath -ldflags "-s -w -X main.version=..."`):
+
+| OS | Architectures |
+|---|---|
+| Linux | amd64, arm64, armv7, armv6, 386 |
+| macOS | amd64 (Intel), arm64 (Apple Silicon) |
+| Windows | amd64, arm64 (`.exe`) |
+
+Docker images are published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`. The Go
+binary cross-compiles natively on the build platform (`--platform=$BUILDPLATFORM`), so no
+QEMU emulation is involved in the build itself.
+
+Version resolution differs by trigger, so tags stay monotonic without a Release:
+
+- **Release-driven Docker run** — reuses the tag the Release just created.
+- **Standalone Docker run** — computes the next patch and pushes that tag *after* a
+  successful image push, so repeated manual runs increment instead of republishing.
+
+Repository secrets required for the Docker workflow: `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN`. The release workflow needs no secrets beyond the built-in
+`GITHUB_TOKEN`.
+
+To build the full artifact set locally:
+
+```bash
+VERSION=$(./scripts/next-version.sh) ./scripts/build.sh   # -> dist/
+```
 
 ---
 
@@ -354,6 +411,7 @@ Tuning tips for the 2-core arm64 / 12 GB target:
 | Symptom | Cause / fix |
 |---|---|
 | `"ollama": "unreachable"` in `/healthz`; every category is `Other` | Ollama isn't running or `OLLAMA_URL` is wrong. The service still returns real deterministic metadata — it degrades, it does not fail. Start Ollama / fix the URL, and `ollama pull` the model. |
+| `"ollama": "ok"` in `/healthz`, but every category is still `Other` | Ollama is running but the configured model was never pulled — `/healthz` probes the server (`/api/version`), not the model, and the sidecar's `ollama list` healthcheck passes with zero models. Check `docker compose exec ollama ollama list` and `docker compose logs linkmeta \| grep "llm failed"` for the real error, then `ollama pull qwen2.5:3b-instruct`. |
 | `502 {"error":"fetch: ..."}` | The target page couldn't be fetched (timeout, DNS, non-2xx). Some sites block bots — set a different `USER_AGENT`. |
 | `blocked target address ...` on internal URLs | The SSRF guard refused a private/loopback target. Set `ALLOW_PRIVATE_TARGETS=true` if that's intentional. |
 | Garbled / mojibake Hebrew | Legacy sites may serve `windows-1255`. linkmeta normalizes charset to UTF-8 automatically; if a site mislabels its encoding, the raw bytes may still be off at the source. |
